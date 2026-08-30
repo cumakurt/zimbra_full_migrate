@@ -46,259 +46,60 @@ Kaynak:
 
 Kaynak sertifika ve özel anahtar SSH üzerinden taşınsa da son derece hassastır. Hedef log’unu, yedeği, root SSH anahtarını ve tutulması istenmiş staging dizinini koruyun.
 
-## Yeni sunucuda root olarak SSH anahtarı hazırlama
+## SSH anahtarı ve çalıştırma
 
-SSL migrasyonu **yeni sunucuda root olarak** çalıştığı için SSH anahtarı ve kaynak host kaydı hedefteki `zimbra` kullanıcısına değil, root’a ait olmalıdır. Aşağıdaki örnek yalnızca bu migrasyon için özel bir anahtar oluşturur. Komutları çalıştırmadan önce örnek hostname ve portu değiştirin.
+Script **yeni sunucuda root olarak** çalışır ve eski sunucuya `zimbra` kullanıcısıyla bağlanır. Yeni sunucuda bir anahtar oluşturun, yalnızca açık anahtarı eski sunucuya ekleyin, sonra özel anahtar yolunu script’e verin. Özel anahtarı eski sunucuya kopyalamayın.
 
-**Önemli:** 1., 2., 4., 5. ve 6. adımlardaki `OLD_ZIMBRA`, `OLD_SSH_PORT` ve `SSL_MIGRATE_KEY` değişkenleri aynı root oturumunda geçerlidir. Yeni bir oturum açtıysanız, ilgili adımın başındaki değişken bloğunu tekrar çalıştırın. Değişkenler ayarlanmadan devam ederseniz `Saving key "" failed` hatası alırsınız.
-
-### 1. Yeni sunucuda root olun ve bağlantıyı tanımlayın
-
-**Yeni Zimbra sunucusunda** çalıştırın:
+### 1. Yeni sunucuda root olarak anahtar oluşturun
 
 ```bash
-sudo -i
-
-OLD_ZIMBRA="oldmail.example.com"
-OLD_SSH_PORT="22"
-SSL_MIGRATE_KEY="/root/.ssh/zimbra_ssl_migrate_ed25519"
-
-printf 'Kaynak: %s:%s\nAnahtar: %s\n' \
-  "$OLD_ZIMBRA" "$OLD_SSH_PORT" "$SSL_MIGRATE_KEY"
+ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_ed25519_zimbra
 ```
 
-`OLD_ZIMBRA` değerinin gerçekten eski/kaynak Zimbra sunucusunu gösterdiğini doğrulayın. Tahmin edilen bir adresle devam etmeyin.
+### 2. Açık anahtarı eski sunucuya ekleyin
 
-### 2. Yeni sunucuda özel bir Ed25519 anahtarı oluşturun
-
-**Yeni sunucuda** root olarak devam edin. 1. adımı aynı oturumda çalıştırmadıysanız, aşağıdaki değişken bloğunu da çalıştırın:
+**Yeni sunucuda** açık anahtarı görüntüleyin:
 
 ```bash
-# 1. adımı atladıysanız veya yeni bir root oturumu açtıysanız önce bunları ayarlayın:
-OLD_ZIMBRA="oldmail.example.com"
-OLD_SSH_PORT="22"
-SSL_MIGRATE_KEY="/root/.ssh/zimbra_ssl_migrate_ed25519"
-
-: "${OLD_ZIMBRA:?OLD_ZIMBRA boş; örnek hostname yerine gerçek kaynak adresini yazın.}"
-: "${OLD_SSH_PORT:?OLD_SSH_PORT boş.}"
-: "${SSL_MIGRATE_KEY:?SSL_MIGRATE_KEY boş; anahtar dosya yolunu ayarlayın.}"
-
-install -d -o root -g root -m 0700 /root/.ssh
-
-if [[ -e "$SSL_MIGRATE_KEY" || -e "${SSL_MIGRATE_KEY}.pub" ]]; then
-  printf 'Anahtar zaten var; inceleyip yeniden kullanın veya başka yol seçin: %s\n' \
-    "$SSL_MIGRATE_KEY" >&2
-else
-  ssh-keygen -t ed25519 -a 100 -N '' \
-    -C "zimbra-ssl-migrate@$(hostname -f)" \
-    -f "$SSL_MIGRATE_KEY"
-fi
-
-chmod 0600 "$SSL_MIGRATE_KEY"
-chmod 0644 "${SSL_MIGRATE_KEY}.pub"
-ssh-keygen -lf "${SSL_MIGRATE_KEY}.pub"
+cat /root/.ssh/id_ed25519_zimbra.pub
 ```
 
-Migrasyon etkileşimsiz `BatchMode` kullandığı için `-N ''`, bu işe özel şifresiz anahtar üretir. Root hesabını ve anahtarı koruyun. `zimbra_ssl_migrate_ed25519` adlı özel dosyayı eski sunucuya hiçbir zaman kopyalamayın; eski sunucuda yalnızca `.pub` dosyasına yetki verilir.
-
-### 3. Eski sunucunun fingerprint’ini alın ve bağımsız doğrulayın
-
-**Eski sunucunun** güvenilir konsolunda/oturumunda root olarak çalıştırın:
+**Eski sunucuda** root olarak bu **tek satırı** `/opt/zimbra/.ssh/authorized_keys` dosyasının sonuna ekleyin. Dizin yoksa oluşturun. Mevcut anahtarların üzerine yazmayın.
 
 ```bash
-sudo -i
-
-for host_key in /etc/ssh/ssh_host_*_key.pub; do
-  [[ -f "$host_key" ]] && ssh-keygen -lf "$host_key"
-done
+mkdir -p /opt/zimbra/.ssh
+chmod 700 /opt/zimbra/.ssh
+chown zimbra:zimbra /opt/zimbra/.ssh
+vi /opt/zimbra/.ssh/authorized_keys
 ```
 
-SSH’nin sunduğu host anahtarı algoritmasına ait fingerprint’i kaydedin. Bu değeri yeni sunucu bağlantısından bağımsız bir kanal üzerinden doğrulayın; örneğin eski sunucunun fiziksel/VM konsolu veya onaylı envanter kaydı.
-
-Migrasyon script’inin varsayılanı `StrictHostKeyChecking=yes` değeridir. Gösterilen fingerprint bağımsız kaydedilen değerle birebir eşleşmeden yeni veya değişmiş host anahtarını kabul etmeyin.
-
-### 4. Açık anahtarı eski sunucuya aktarın
-
-Migrasyon script’i kaynak sunucuya `zimbra@` ile bağlanır; bu yüzden açık anahtarın eski sunucudaki `zimbra` kullanıcısının `authorized_keys` dosyasına eklenmesi gerekir. Birçok Zimbra kurulumunda `zimbra` parolası yoktur veya parola ile SSH kapalıdır; bu durumda `ssh-copy-id zimbra@...` **çalışmaz**.
-
-**Önerilen yol:** Yeni sunucudan, zaten çalışan **root SSH erişiminizi** kullanarak açık anahtarı uzaktan kurun. Bu adımda root bağlantısı için mevcut root SSH kimliğiniz kullanılır; `SSL_MIGRATE_KEY` yalnızca kurulacak açık anahtar dosyasıdır ve sonraki `zimbra@` bağlantıları için kullanılır.
-
-**Yeni sunucuda** root olarak:
+Ardından:
 
 ```bash
-OLD_ZIMBRA="oldmail.example.com"
-OLD_SSH_PORT="22"
-SSL_MIGRATE_KEY="/root/.ssh/zimbra_ssl_migrate_ed25519"
-
-: "${OLD_ZIMBRA:?OLD_ZIMBRA boş; örnek hostname/IP yerine gerçek kaynak adresini yazın.}"
-: "${SSL_MIGRATE_KEY:?SSL_MIGRATE_KEY boş; anahtar dosya yolunu ayarlayın.}"
-test -s "${SSL_MIGRATE_KEY}.pub" || {
-  printf 'Public key not found: %s\n' "${SSL_MIGRATE_KEY}.pub" >&2
-  exit 1
-}
-
-PUB_KEY="$(cat "${SSL_MIGRATE_KEY}.pub")"
-
-ssh -p "$OLD_SSH_PORT" \
-  -o StrictHostKeyChecking=yes \
-  root@"$OLD_ZIMBRA" \
-  bash -s -- "$PUB_KEY" <<'REMOTE'
-set -euo pipefail
-pub_key="$1"
-zimbra_home="$(getent passwd zimbra | awk -F: '$1 == "zimbra" { print $6 }')"
-test -n "$zimbra_home"
-
-install -d -o zimbra -g zimbra -m 0700 "$zimbra_home/.ssh"
-auth_keys="$zimbra_home/.ssh/authorized_keys"
-touch "$auth_keys"
-chown zimbra:zimbra "$auth_keys"
-chmod 0600 "$auth_keys"
-
-if ! grep -qxF "$pub_key" "$auth_keys"; then
-  printf '%s\n' "$pub_key" >> "$auth_keys"
-fi
-
-command -v restorecon >/dev/null 2>&1 && \
-  restorecon -RF "$zimbra_home/.ssh"
-
-printf 'Authorized key installed for zimbra.\n'
-REMOTE
+chown zimbra:zimbra /opt/zimbra/.ssh/authorized_keys
+chmod 600 /opt/zimbra/.ssh/authorized_keys
 ```
 
-`OLD_ZIMBRA` için IP adresi de kullanılabilir (ör. `10.1.0.20`). Root oturumunda `yes` istemi görülürse, 3. adımda bağımsız doğruladığınız fingerprint ile eşleştiğinden emin olun. Komut yalnızca `.pub` satırını ekler; özel anahtarı asla eski sunucuya kopyalamayın. Komut tekrar çalıştırılırsa aynı satırı ikinci kez eklemez.
+### 3. Script’i yeni sunucuda root olarak çalıştırın
 
-#### Alternatif: `zimbra` parolası varsa `ssh-copy-id`
-
-Eski sunucuda `zimbra` için parola ile SSH açıksa:
+İsterseniz önce salt doğrulama:
 
 ```bash
-OLD_ZIMBRA="oldmail.example.com"
-OLD_SSH_PORT="22"
-SSL_MIGRATE_KEY="/root/.ssh/zimbra_ssl_migrate_ed25519"
-
-: "${OLD_ZIMBRA:?OLD_ZIMBRA boş; örnek hostname yerine gerçek kaynak adresini yazın.}"
-: "${SSL_MIGRATE_KEY:?SSL_MIGRATE_KEY boş; anahtar dosya yolunu ayarlayın.}"
-
-ssh-copy-id \
-  -i "${SSL_MIGRATE_KEY}.pub" \
-  -p "$OLD_SSH_PORT" \
-  "zimbra@${OLD_ZIMBRA}"
-```
-
-#### Alternatif: eski sunucu konsolundan elle kurulum
-
-Yeni sunucudan root SSH mümkün değilse, **yeni sunucuda** açık anahtarı görüntüleyin:
-
-```bash
-SSL_MIGRATE_KEY="${SSL_MIGRATE_KEY:-/root/.ssh/zimbra_ssl_migrate_ed25519}"
-: "${SSL_MIGRATE_KEY:?SSL_MIGRATE_KEY boş; anahtar dosya yolunu ayarlayın.}"
-
-cat "${SSL_MIGRATE_KEY}.pub"
-```
-
-Sonra **eski sunucunun** güvenilir root konsolunda gerçek Zimbra home dizinini belirleyip bu tek açık anahtar satırını elle ekleyin:
-
-```bash
-ZIMBRA_SSH_HOME="$(getent passwd zimbra | awk -F: '$1 == "zimbra" { print $6 }')"
-test -n "$ZIMBRA_SSH_HOME"
-
-install -d -o zimbra -g zimbra -m 0700 "$ZIMBRA_SSH_HOME/.ssh"
-touch "$ZIMBRA_SSH_HOME/.ssh/authorized_keys"
-chown zimbra:zimbra "$ZIMBRA_SSH_HOME/.ssh/authorized_keys"
-chmod 0600 "$ZIMBRA_SSH_HOME/.ssh/authorized_keys"
-
-vi "$ZIMBRA_SSH_HOME/.ssh/authorized_keys"
-```
-
-Yalnızca `.pub` dosyasındaki tek satırı yapıştırın; özel anahtarı asla yapıştırmayın. Mevcut yetkili anahtarları koruyun. SELinux kullanılan sistemde komut varsa context’i düzeltin:
-
-```bash
-command -v restorecon >/dev/null 2>&1 && \
-  restorecon -RF "$ZIMBRA_SSH_HOME/.ssh"
-```
-
-### 5. Yeni sunucudan gerçek etkileşimsiz bağlantıyı test edin
-
-**Yeni sunucuda** root olarak çalıştırın:
-
-```bash
-OLD_ZIMBRA="oldmail.example.com"
-OLD_SSH_PORT="22"
-SSL_MIGRATE_KEY="/root/.ssh/zimbra_ssl_migrate_ed25519"
-
-: "${OLD_ZIMBRA:?OLD_ZIMBRA boş; örnek hostname yerine gerçek kaynak adresini yazın.}"
-: "${SSL_MIGRATE_KEY:?SSL_MIGRATE_KEY boş; anahtar dosya yolunu ayarlayın.}"
-
-ssh \
-  -i "$SSL_MIGRATE_KEY" \
-  -p "$OLD_SSH_PORT" \
-  -o BatchMode=yes \
-  -o StrictHostKeyChecking=yes \
-  "zimbra@${OLD_ZIMBRA}" \
-  'id -un; /opt/zimbra/bin/zmhostname; \
-   test -s /opt/zimbra/ssl/zimbra/commercial/commercial.key; \
-   test -r /opt/zimbra/ssl/zimbra/commercial/commercial.key; \
-   test -s /opt/zimbra/ssl/zimbra/commercial/commercial.crt; \
-   test -s /opt/zimbra/ssl/zimbra/commercial/commercial_ca.crt; \
-   printf "SSL_FILES_OK\n"'
-```
-
-Beklenen çıktıda `zimbra`, eski Zimbra hostname’i ve `SSL_FILES_OK` bulunur. Parola/passphrase veya host anahtarı istemi görülmesi etkileşimsiz kurulumun tamamlanmadığını gösterir.
-
-Gizli içeriği göstermeden kaynak izinlerini de inceleyebilirsiniz:
-
-```bash
-ssh \
-  -i "$SSL_MIGRATE_KEY" \
-  -p "$OLD_SSH_PORT" \
-  -o BatchMode=yes \
-  -o StrictHostKeyChecking=yes \
-  "zimbra@${OLD_ZIMBRA}" \
-  'stat -c "%a %U:%G %n" /opt/zimbra/ssl/zimbra/commercial/commercial.*'
-```
-
-Script “other” kullanıcıların erişebildiği kaynak `commercial.key` dosyasını reddeder. Tipik Zimbra anahtar izinleri 8.7 öncesinde `0740`, 8.7 ve yeni sürümlerde `0640` değeridir.
-
-### 6. Önce verify-only, sonra onaylı deploy çalıştırın
-
-**Yeni sunucudaki** depo dizininde root olarak:
-
-```bash
-OLD_ZIMBRA="oldmail.example.com"
-OLD_SSH_PORT="22"
-SSL_MIGRATE_KEY="/root/.ssh/zimbra_ssl_migrate_ed25519"
-
-: "${OLD_ZIMBRA:?OLD_ZIMBRA boş; örnek hostname yerine gerçek kaynak adresini yazın.}"
-: "${SSL_MIGRATE_KEY:?SSL_MIGRATE_KEY boş; anahtar dosya yolunu ayarlayın.}"
-
 ./zimbra_ssl_migrate.sh \
-  --old "$OLD_ZIMBRA" \
-  --port "$OLD_SSH_PORT" \
-  --identity "$SSL_MIGRATE_KEY" \
+  --old 10.1.0.20 \
+  --identity /root/.ssh/id_ed25519_zimbra \
   --verify-only
 ```
 
-Verify-only sonucunu inceledikten sonra gerçek deploy’u yalnızca onaylı bakım penceresinde çalıştırın:
+Sonra deploy:
 
 ```bash
-OLD_ZIMBRA="oldmail.example.com"
-OLD_SSH_PORT="22"
-SSL_MIGRATE_KEY="/root/.ssh/zimbra_ssl_migrate_ed25519"
-
-: "${OLD_ZIMBRA:?OLD_ZIMBRA boş; örnek hostname yerine gerçek kaynak adresini yazın.}"
-: "${SSL_MIGRATE_KEY:?SSL_MIGRATE_KEY boş; anahtar dosya yolunu ayarlayın.}"
-
 ./zimbra_ssl_migrate.sh \
-  --old "$OLD_ZIMBRA" \
-  --port "$OLD_SSH_PORT" \
-  --identity "$SSL_MIGRATE_KEY"
+  --old 10.1.0.20 \
+  --identity /root/.ssh/id_ed25519_zimbra
 ```
 
-### 7. Kabul tamamlanınca geçici SSH yetkisini kaldırın
-
-Deploy, elle Zimbra restart’ı, endpoint doğrulaması ve rollback/kabul penceresi tamamlanmadan erişimi kaldırmayın. Sonrasında eski sunucunun `authorized_keys` dosyasından yalnızca bu işe özel `zimbra-ssl-migrate@...` açık anahtar satırını kaldırın; ilgisiz anahtarları koruyun. Yeni sunucudaki özel/açık anahtar çiftini kurumun anahtar saklama politikasına göre silin veya arşivleyin.
-
-Kontrollü ilk bağlantı önceden hazırlanamıyorsa `--accept-new-host-key`, OpenSSH `accept-new` kipini açar. Bu seçenek görülmemiş anahtarı kabul eder, değişmiş anahtarı reddeder; yukarıdaki bağımsız fingerprint sürecinden daha düşük güvenlik sağlar.
+İşlem kabul edildikten sonra eski sunucunun `authorized_keys` dosyasından yalnızca bu açık anahtar satırını silin. Kaynak host anahtarı henüz root `known_hosts` içinde değilse `--accept-new-host-key` ekleyin.
 
 ## Hızlı başlangıç
 
@@ -308,22 +109,7 @@ Gerekirse çalıştırma izni verin:
 chmod 700 zimbra_ssl_migrate.sh
 ```
 
-Önce salt doğrulama çalıştırın. Bu kip hedef sertifikayı değiştirmez; ancak kaynak özel anahtarını geçici olarak `0700` izinli staging dizinine indirir ve çıkışta siler:
-
-```bash
-./zimbra_ssl_migrate.sh \
-  --old oldmail.example.com \
-  --identity /root/.ssh/zimbra_ssl_migrate_ed25519 \
-  --verify-only
-```
-
-Ardından onaylı değişiklik penceresinde deploy edin:
-
-```bash
-./zimbra_ssl_migrate.sh \
-  --old oldmail.example.com \
-  --identity /root/.ssh/zimbra_ssl_migrate_ed25519
-```
+Yukarıdaki üç adımı tamamlayın; gerçek deploy’dan önce `--verify-only` çalıştırın. `--verify-only` hedef sertifikayı değiştirmez; kaynak özel anahtarını geçici olarak `0700` izinli staging dizinine indirir ve çıkışta siler.
 
 Sertifika hedefin mevcut `zmhostname` değeriyle eşleşmelidir. Override seçeneğini yalnızca aşamalı hostname/DNS geçişi gibi, uyuşmazlığın kasıtlı ve bağımsız olarak incelendiği durumda kullanın:
 
@@ -354,14 +140,14 @@ Varsayılan konsol bilerek sadedir: renkli özet, numaralı fazlar ve yalnızca 
 
 ```bash
 ./zimbra_ssl_migrate.sh \
-  --old oldmail.example.com \
-  --identity /root/.ssh/zimbra_ssl_migrate_ed25519 \
+  --old 10.1.0.20 \
+  --identity /root/.ssh/id_ed25519_zimbra \
   --verify-only \
   --verbose
 
 NO_COLOR=1 ./zimbra_ssl_migrate.sh \
-  --old oldmail.example.com \
-  --identity /root/.ssh/zimbra_ssl_migrate_ed25519 \
+  --old 10.1.0.20 \
+  --identity /root/.ssh/id_ed25519_zimbra \
   --verify-only
 ```
 
