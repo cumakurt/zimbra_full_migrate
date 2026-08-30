@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+command_name="$(basename "$0")"
+
+case "$command_name" in
+    zmcontrol)
+        case "${1:-}" in
+            status|-v)
+                printf 'Host %s\n' "${FAKE_TARGET_HOSTNAME:-destination.example.test}"
+                printf '%-24s %s\n' amavis Running
+                printf '%-24s %s\n' antispam Running
+                printf '%-24s %s\n' antivirus Running
+                printf '%-24s %s\n' mta Running
+                ;;
+            *)
+                exit 1
+                ;;
+        esac
+        ;;
+    postqueue)
+        case "${1:-}" in
+            -p)
+                printf '%s\n' '-Queue ID-  --Size--' '-- 0 Kbytes in 0 Requests.'
+                ;;
+            -f)
+                printf 'queue flush requested\n'
+                ;;
+            *)
+                exit 1
+                ;;
+        esac
+        ;;
+    *)
+        printf 'Unsupported fake Zimbra command: %s\n' "$command_name" >&2
+        exit 1
+        ;;
+esac

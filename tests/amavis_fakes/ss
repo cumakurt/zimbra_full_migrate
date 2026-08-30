@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+if [[ "${FAKE_SS_EMPTY:-0}" == "1" ]]; then
+    exit 0
+fi
+
+printf '%s\n' \
+    'LISTEN 0 128 127.0.0.1:10024 0.0.0.0:*' \
+    'LISTEN 0 128 127.0.0.1:10026 0.0.0.0:*'

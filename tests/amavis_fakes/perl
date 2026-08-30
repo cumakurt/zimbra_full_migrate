@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+if [[ -n "${FAKE_PERL_SLEEP_MARKER:-}" && ! -e "$FAKE_PERL_SLEEP_MARKER" ]]; then
+    : > "$FAKE_PERL_SLEEP_MARKER"
+    sleep 30
+fi
+
+fail_message="${FAKE_PERL_FAIL_MSG:-perl: OPENSSL_3.0.8 not found (required by libcrypto.so.3 / Net::SSLeay)}"
+
+if [[ "${FAKE_PERL_ALWAYS_OK:-0}" == "1" ]]; then
+    printf 'Net::SSLeay OK\n'
+    exit 0
+fi
+
+if [[ "${FAKE_PERL_ALWAYS_FAIL:-0}" == "1" ]]; then
+    printf '%s\n' "$fail_message" >&2
+    exit 1
+fi
+
+lib_hint="${FAKE_ZIMBRA_LIB:-/common/lib}"
+case ":${LD_LIBRARY_PATH:-}:" in
+    *:"$lib_hint":*|*:*/common/lib:*)
+        printf 'Net::SSLeay OK\n'
+        exit 0
+        ;;
+esac
+
+printf '%s\n' "$fail_message" >&2
+exit 1
