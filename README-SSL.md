@@ -50,6 +50,8 @@ The source certificate and private key travel over SSH but remain highly sensiti
 
 The SSL migration runs on the **new server as root**, so the SSH key and source host record must belong to root—not to the destination `zimbra` user. The following example creates a dedicated key only for this migration. Replace the example hostname and port before running anything.
 
+**Important:** Steps 1, 2, 4, 5, and 6 share the same `OLD_ZIMBRA`, `OLD_SSH_PORT`, and `SSL_MIGRATE_KEY` shell variables in one root session. If you open a new session, re-run the variable block at the top of the relevant step. Without those variables, step 2 fails with `Saving key "" failed`.
+
 ### 1. Become root on the new server and define the connection
 
 Run on the **new Zimbra server**:
@@ -69,9 +71,18 @@ Confirm that `OLD_ZIMBRA` really identifies the old/source Zimbra server. Do not
 
 ### 2. Create a dedicated Ed25519 key on the new server
 
-Still as root on the **new server**:
+Still as root on the **new server**. If you skipped step 1 or opened a new root session, run the variable block below first:
 
 ```bash
+# If you skipped step 1 or opened a new root session, set these first:
+OLD_ZIMBRA="oldmail.example.com"
+OLD_SSH_PORT="22"
+SSL_MIGRATE_KEY="/root/.ssh/zimbra_ssl_migrate_ed25519"
+
+: "${OLD_ZIMBRA:?OLD_ZIMBRA is empty; replace the example hostname with the real source address.}"
+: "${OLD_SSH_PORT:?OLD_SSH_PORT is empty.}"
+: "${SSL_MIGRATE_KEY:?SSL_MIGRATE_KEY is empty; set the key file path.}"
+
 install -d -o root -g root -m 0700 /root/.ssh
 
 if [[ -e "$SSL_MIGRATE_KEY" || -e "${SSL_MIGRATE_KEY}.pub" ]]; then
@@ -108,9 +119,16 @@ The migration script defaults to `StrictHostKeyChecking=yes`. Do not accept a ne
 
 ### 4. Copy the public key to the old server
 
-Return to the root shell on the **new server** and use `ssh-copy-id`:
+Return to the root shell on the **new server** and use `ssh-copy-id`. Re-export the variables if this is a new session:
 
 ```bash
+OLD_ZIMBRA="oldmail.example.com"
+OLD_SSH_PORT="22"
+SSL_MIGRATE_KEY="/root/.ssh/zimbra_ssl_migrate_ed25519"
+
+: "${OLD_ZIMBRA:?OLD_ZIMBRA is empty; replace the example hostname with the real source address.}"
+: "${SSL_MIGRATE_KEY:?SSL_MIGRATE_KEY is empty; set the key file path.}"
+
 ssh-copy-id \
   -i "${SSL_MIGRATE_KEY}.pub" \
   -p "$OLD_SSH_PORT" \
@@ -122,6 +140,9 @@ Compare the fingerprint prompt with the value collected in step 3 before answeri
 If `ssh-copy-id` is unavailable or password login for `zimbra` is disabled, display the public key on the **new server**:
 
 ```bash
+SSL_MIGRATE_KEY="${SSL_MIGRATE_KEY:-/root/.ssh/zimbra_ssl_migrate_ed25519}"
+: "${SSL_MIGRATE_KEY:?SSL_MIGRATE_KEY is empty; set the key file path.}"
+
 cat "${SSL_MIGRATE_KEY}.pub"
 ```
 
@@ -151,6 +172,13 @@ command -v restorecon >/dev/null 2>&1 && \
 Run as root on the **new server**:
 
 ```bash
+OLD_ZIMBRA="oldmail.example.com"
+OLD_SSH_PORT="22"
+SSL_MIGRATE_KEY="/root/.ssh/zimbra_ssl_migrate_ed25519"
+
+: "${OLD_ZIMBRA:?OLD_ZIMBRA is empty; replace the example hostname with the real source address.}"
+: "${SSL_MIGRATE_KEY:?SSL_MIGRATE_KEY is empty; set the key file path.}"
+
 ssh \
   -i "$SSL_MIGRATE_KEY" \
   -p "$OLD_SSH_PORT" \
@@ -186,6 +214,13 @@ The script rejects a source `commercial.key` that is accessible to “other” u
 From the repository directory on the **new server**, still as root:
 
 ```bash
+OLD_ZIMBRA="oldmail.example.com"
+OLD_SSH_PORT="22"
+SSL_MIGRATE_KEY="/root/.ssh/zimbra_ssl_migrate_ed25519"
+
+: "${OLD_ZIMBRA:?OLD_ZIMBRA is empty; replace the example hostname with the real source address.}"
+: "${SSL_MIGRATE_KEY:?SSL_MIGRATE_KEY is empty; set the key file path.}"
+
 ./zimbra_ssl_migrate.sh \
   --old "$OLD_ZIMBRA" \
   --port "$OLD_SSH_PORT" \
@@ -196,6 +231,13 @@ From the repository directory on the **new server**, still as root:
 Only after reviewing the verify-only result, run the real deployment during the approved maintenance window:
 
 ```bash
+OLD_ZIMBRA="oldmail.example.com"
+OLD_SSH_PORT="22"
+SSL_MIGRATE_KEY="/root/.ssh/zimbra_ssl_migrate_ed25519"
+
+: "${OLD_ZIMBRA:?OLD_ZIMBRA is empty; replace the example hostname with the real source address.}"
+: "${SSL_MIGRATE_KEY:?SSL_MIGRATE_KEY is empty; set the key file path.}"
+
 ./zimbra_ssl_migrate.sh \
   --old "$OLD_ZIMBRA" \
   --port "$OLD_SSH_PORT" \
