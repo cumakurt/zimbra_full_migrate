@@ -46,15 +46,167 @@ Source:
 
 The source certificate and private key travel over SSH but remain highly sensitive. Protect the destination log, backup, root SSH identity, and any retained staging directory.
 
-## SSH host-key trust
+## SSH key setup from the new server as root
 
-The safe default is `StrictHostKeyChecking=yes`. Before using the script, connect once as root and verify the source fingerprint through an independent trusted channel:
+The SSL migration runs on the **new server as root**, so the SSH key and source host record must belong to root—not to the destination `zimbra` user. The following example creates a dedicated key only for this migration. Replace the example hostname and port before running anything.
+
+### 1. Become root on the new server and define the connection
+
+Run on the **new Zimbra server**:
 
 ```bash
-ssh zimbra@oldmail.example.com 'printf OK'
+sudo -i
+
+OLD_ZIMBRA="oldmail.example.com"
+OLD_SSH_PORT="22"
+SSL_MIGRATE_KEY="/root/.ssh/zimbra_ssl_migrate_ed25519"
+
+printf 'Source: %s:%s\nKey: %s\n' \
+  "$OLD_ZIMBRA" "$OLD_SSH_PORT" "$SSL_MIGRATE_KEY"
 ```
 
-If a controlled first connection cannot be prepared, `--accept-new-host-key` enables OpenSSH's `accept-new` mode. This accepts an unseen key but still rejects a changed key. It is less safe than verifying the fingerprint before migration.
+Confirm that `OLD_ZIMBRA` really identifies the old/source Zimbra server. Do not continue with a guessed address.
+
+### 2. Create a dedicated Ed25519 key on the new server
+
+Still as root on the **new server**:
+
+```bash
+install -d -o root -g root -m 0700 /root/.ssh
+
+if [[ -e "$SSL_MIGRATE_KEY" || -e "${SSL_MIGRATE_KEY}.pub" ]]; then
+  printf 'Key already exists; inspect and reuse it or choose another path: %s\n' \
+    "$SSL_MIGRATE_KEY" >&2
+else
+  ssh-keygen -t ed25519 -a 100 -N '' \
+    -C "zimbra-ssl-migrate@$(hostname -f)" \
+    -f "$SSL_MIGRATE_KEY"
+fi
+
+chmod 0600 "$SSL_MIGRATE_KEY"
+chmod 0644 "${SSL_MIGRATE_KEY}.pub"
+ssh-keygen -lf "${SSL_MIGRATE_KEY}.pub"
+```
+
+`-N ''` creates an unencrypted dedicated key because the migration uses non-interactive `BatchMode`. Keep the root account and key protected. Never copy `zimbra_ssl_migrate_ed25519` (the private file) to the old server; only its `.pub` file is authorized there.
+
+### 3. Obtain and independently verify the old server fingerprint
+
+From a trusted console/session on the **old server**, run as root:
+
+```bash
+sudo -i
+
+for host_key in /etc/ssh/ssh_host_*_key.pub; do
+  [[ -f "$host_key" ]] && ssh-keygen -lf "$host_key"
+done
+```
+
+Record the fingerprint for the host-key algorithm presented by SSH. Verify it through a channel independent of the new server connection—for example the old server's console, virtualization console, or an approved inventory record.
+
+The migration script defaults to `StrictHostKeyChecking=yes`. Do not accept a new or changed host key unless the displayed fingerprint exactly matches the independently recorded value.
+
+### 4. Copy the public key to the old server
+
+Return to the root shell on the **new server** and use `ssh-copy-id`:
+
+```bash
+ssh-copy-id \
+  -i "${SSL_MIGRATE_KEY}.pub" \
+  -p "$OLD_SSH_PORT" \
+  "zimbra@${OLD_ZIMBRA}"
+```
+
+Compare the fingerprint prompt with the value collected in step 3 before answering `yes`. `ssh-copy-id` normally asks for the old server's `zimbra` password or another already-authorized authentication method. It installs only the public key.
+
+If `ssh-copy-id` is unavailable or password login for `zimbra` is disabled, display the public key on the **new server**:
+
+```bash
+cat "${SSL_MIGRATE_KEY}.pub"
+```
+
+Then, from a trusted root console on the **old server**, determine the actual Zimbra home and install that one public-key line manually:
+
+```bash
+ZIMBRA_SSH_HOME="$(getent passwd zimbra | awk -F: '$1 == "zimbra" { print $6 }')"
+test -n "$ZIMBRA_SSH_HOME"
+
+install -d -o zimbra -g zimbra -m 0700 "$ZIMBRA_SSH_HOME/.ssh"
+touch "$ZIMBRA_SSH_HOME/.ssh/authorized_keys"
+chown zimbra:zimbra "$ZIMBRA_SSH_HOME/.ssh/authorized_keys"
+chmod 0600 "$ZIMBRA_SSH_HOME/.ssh/authorized_keys"
+
+vi "$ZIMBRA_SSH_HOME/.ssh/authorized_keys"
+```
+
+Paste exactly the single `.pub` line; never paste the private key. Preserve existing authorized keys. On an SELinux system, restore the context if the command is available:
+
+```bash
+command -v restorecon >/dev/null 2>&1 && \
+  restorecon -RF "$ZIMBRA_SSH_HOME/.ssh"
+```
+
+### 5. Test the exact non-interactive connection from the new server
+
+Run as root on the **new server**:
+
+```bash
+ssh \
+  -i "$SSL_MIGRATE_KEY" \
+  -p "$OLD_SSH_PORT" \
+  -o BatchMode=yes \
+  -o StrictHostKeyChecking=yes \
+  "zimbra@${OLD_ZIMBRA}" \
+  'id -un; /opt/zimbra/bin/zmhostname; \
+   test -s /opt/zimbra/ssl/zimbra/commercial/commercial.key; \
+   test -r /opt/zimbra/ssl/zimbra/commercial/commercial.key; \
+   test -s /opt/zimbra/ssl/zimbra/commercial/commercial.crt; \
+   test -s /opt/zimbra/ssl/zimbra/commercial/commercial_ca.crt; \
+   printf "SSL_FILES_OK\n"'
+```
+
+Expected output includes `zimbra`, the old Zimbra hostname, and `SSL_FILES_OK`. A password/passphrase prompt or host-key prompt means the non-interactive setup is not complete.
+
+You can also inspect source permissions without displaying secret contents:
+
+```bash
+ssh \
+  -i "$SSL_MIGRATE_KEY" \
+  -p "$OLD_SSH_PORT" \
+  -o BatchMode=yes \
+  -o StrictHostKeyChecking=yes \
+  "zimbra@${OLD_ZIMBRA}" \
+  'stat -c "%a %U:%G %n" /opt/zimbra/ssl/zimbra/commercial/commercial.*'
+```
+
+The script rejects a source `commercial.key` that is accessible to “other” users. Typical Zimbra key modes are `0740` before Zimbra 8.7 and `0640` on 8.7 and newer.
+
+### 6. Run verify-only, then the approved deployment
+
+From the repository directory on the **new server**, still as root:
+
+```bash
+./zimbra_ssl_migrate.sh \
+  --old "$OLD_ZIMBRA" \
+  --port "$OLD_SSH_PORT" \
+  --identity "$SSL_MIGRATE_KEY" \
+  --verify-only
+```
+
+Only after reviewing the verify-only result, run the real deployment during the approved maintenance window:
+
+```bash
+./zimbra_ssl_migrate.sh \
+  --old "$OLD_ZIMBRA" \
+  --port "$OLD_SSH_PORT" \
+  --identity "$SSL_MIGRATE_KEY"
+```
+
+### 7. Revoke the temporary SSH authorization after acceptance
+
+Do not revoke access until deployment, manual Zimbra restart, endpoint validation, and the rollback/acceptance window are complete. Then remove only the dedicated `zimbra-ssl-migrate@...` public-key line from the old server's `authorized_keys`. Preserve unrelated keys. Remove or archive the dedicated private/public key pair on the new server according to the organization's key-retention policy.
+
+If a controlled first connection cannot be prepared, `--accept-new-host-key` enables OpenSSH's `accept-new` mode. This accepts an unseen key but rejects a changed key; it is less safe than the independent fingerprint process above.
 
 ## Quick start
 
@@ -69,7 +221,7 @@ First perform a read-only validation. Although it does not change the destinatio
 ```bash
 ./zimbra_ssl_migrate.sh \
   --old oldmail.example.com \
-  --identity /root/.ssh/id_ed25519 \
+  --identity /root/.ssh/zimbra_ssl_migrate_ed25519 \
   --verify-only
 ```
 
@@ -78,7 +230,7 @@ Then deploy during an approved change window:
 ```bash
 ./zimbra_ssl_migrate.sh \
   --old oldmail.example.com \
-  --identity /root/.ssh/id_ed25519
+  --identity /root/.ssh/zimbra_ssl_migrate_ed25519
 ```
 
 The certificate must match the destination's current `zmhostname`. Use the override only when the mismatch is intentional and independently reviewed, such as a staged hostname/DNS cutover:
@@ -101,9 +253,25 @@ The certificate must match the destination's current `zmhostname`. Use the overr
 | `--allow-hostname-mismatch` | Explicitly bypass the destination `zmhostname` match gate |
 | `--accept-new-host-key` | Accept an unseen source SSH host key |
 | `--keep-stage` | Keep the secret staging directory after a successful run |
+| `--verbose` | Also display detailed command progress/output on the console |
 | `-h`, `--help` | Display help |
 
 `--keep-stage` leaves a readable copy of the migrated private key owned by the Zimbra user. Use it only for a specific diagnostic need and remove the directory securely afterward.
+
+The default console is intentionally concise: a colored summary, numbered phases, and only necessary success/warning/error messages. Detailed timestamps, certificate metadata, SSH diagnostics, and `zmcertmgr` output remain in the displayed log file. For troubleshooting, add `--verbose`. To disable terminal colors, set `NO_COLOR=1`:
+
+```bash
+./zimbra_ssl_migrate.sh \
+  --old oldmail.example.com \
+  --identity /root/.ssh/zimbra_ssl_migrate_ed25519 \
+  --verify-only \
+  --verbose
+
+NO_COLOR=1 ./zimbra_ssl_migrate.sh \
+  --old oldmail.example.com \
+  --identity /root/.ssh/zimbra_ssl_migrate_ed25519 \
+  --verify-only
+```
 
 ## Safety and transaction behavior
 
@@ -115,7 +283,7 @@ The certificate must match the destination's current `zmhostname`. Use the overr
 - `zmcertmgr verifycrt` must pass before any destination change.
 - Zimbra versions before 8.7 use root-mode `zmcertmgr` and key mode `0740`; detected versions 8.7 and newer use the `zimbra` user and key mode `0640`, following Zimbra's version-specific guidance.
 - The deployment is accepted only when `viewdeployedcrt`, certificate SHA-256 fingerprint, trust chain, and key match all pass afterward.
-- Log files do not contain terminal color escape sequences.
+- Script-generated log entries do not contain terminal color escape sequences.
 
 The script deliberately uses the local-node `zmcertmgr` flow. On multi-node Zimbra installations, plan and validate every node separately.
 

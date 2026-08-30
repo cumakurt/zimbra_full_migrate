@@ -27,6 +27,7 @@ VERIFY_ONLY=0
 ALLOW_HOSTNAME_MISMATCH=0
 ACCEPT_NEW_HOST_KEY=0
 KEEP_STAGE=0
+VERBOSE=0
 MIN_WARN_DAYS=14
 
 # The path overrides are primarily useful for isolated validation. A normal
@@ -63,41 +64,88 @@ ACTIVE_PROCESS_GROUP=""
 
 if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
     C_RESET=$'\033[0m'
+    C_BOLD=$'\033[1m'
+    C_DIM=$'\033[2m'
     C_RED=$'\033[31m'
     C_GREEN=$'\033[32m'
     C_YELLOW=$'\033[33m'
     C_BLUE=$'\033[34m'
+    S_OK='✓'
+    S_WARN='!'
+    S_ERROR='✗'
 else
     C_RESET=''
+    C_BOLD=''
+    C_DIM=''
     C_RED=''
     C_GREEN=''
     C_YELLOW=''
     C_BLUE=''
+    S_OK='+'
+    S_WARN='!'
+    S_ERROR='x'
 fi
 
 # ---------------------------------------------------------------------------
 # OUTPUT AND CLI
 # ---------------------------------------------------------------------------
 
-emit() {
-    local level="$1" color="$2" message="$3" fd=1 timestamp
+write_log() {
+    local level="$1" message="$2" timestamp
     timestamp="$(date '+%F %T')"
-    [[ "$level" == "WARN" || "$level" == "ERROR" ]] && fd=2
 
     if [[ "$LOG_READY" -eq 1 ]]; then
         if ! printf '[%s] [%s] %s\n' "$timestamp" "$level" "$message" >> "$LOG_FILE"; then
             printf '[WARN] Could not append to log: %s\n' "$LOG_FILE" >&2
         fi
     fi
-
-    printf '%b[%s] [%s] %s%b\n' \
-        "$color" "$timestamp" "$level" "$message" "$C_RESET" >&"$fd"
 }
 
-log()  { emit INFO "$C_BLUE" "$1"; }
-ok()   { emit OK "$C_GREEN" "$1"; }
-warn() { emit WARN "$C_YELLOW" "$1"; }
-die()  { emit ERROR "$C_RED" "$1"; exit "${2:-1}"; }
+console_line() {
+    local color="$1" marker="$2" message="$3" fd="${4:-1}"
+    printf '%b  %s %s%b\n' "$color" "$marker" "$message" "$C_RESET" >&"$fd"
+}
+
+log() {
+    write_log INFO "$1"
+    if [[ "$VERBOSE" -eq 1 ]]; then
+        console_line "$C_DIM" '·' "$1"
+    fi
+}
+
+ok() {
+    write_log OK "$1"
+    console_line "$C_GREEN" "$S_OK" "$1"
+}
+
+warn() {
+    write_log WARN "$1"
+    console_line "$C_YELLOW" "$S_WARN" "$1" 2
+}
+
+die() {
+    write_log ERROR "$1"
+    console_line "$C_RED" "$S_ERROR" "$1" 2
+    exit "${2:-1}"
+}
+
+phase() {
+    local current="$1" total="$2" message="$3"
+    write_log PHASE "$message"
+    printf '\n%b[%s/%s] %s%b\n' "$C_BOLD$C_BLUE" \
+        "$current" "$total" "$message" "$C_RESET"
+}
+
+ui_banner() {
+    local mode="$1" source="$2" target="$3" log_file="$4"
+
+    printf '\n%b%s%b\n' "$C_BOLD$C_BLUE" 'Zimbra SSL Migration' "$C_RESET"
+    printf '%b%s%b\n' "$C_DIM" '────────────────────────────────────────────────────────────' "$C_RESET"
+    printf '  %-9s %s\n' 'Mode' "$mode"
+    printf '  %-9s %s\n' 'Source' "$source"
+    printf '  %-9s %s\n' 'Target' "$target"
+    printf '  %-9s %s\n' 'Log' "$log_file"
+}
 
 usage() {
     cat <<EOF
@@ -113,6 +161,7 @@ Options:
   --allow-hostname-mismatch     Allow mismatch with destination zmhostname
   --accept-new-host-key         Trust a previously unseen SSH host key once
   --keep-stage                  Keep staged secret files after success
+  --verbose                     Show detailed command progress on the console
   -h, --help                    Show this help
 
 By default, the source SSH host key must already exist in root's known_hosts.
@@ -170,6 +219,10 @@ while [[ $# -gt 0 ]]; do
             KEEP_STAGE=1
             shift
             ;;
+        --verbose)
+            VERBOSE=1
+            shift
+            ;;
         -h|--help)
             usage
             exit 0
@@ -200,11 +253,8 @@ done
 # PROCESS CONTROL, CLEANUP, AND ROLLBACK
 # ---------------------------------------------------------------------------
 
-run_in_group() {
+wait_for_active_group() {
     local rc
-
-    setsid "$@" &
-    ACTIVE_PROCESS_GROUP=$!
     if wait "$ACTIVE_PROCESS_GROUP"; then
         rc=0
     else
@@ -212,6 +262,34 @@ run_in_group() {
     fi
     ACTIVE_PROCESS_GROUP=""
     return "$rc"
+}
+
+run_in_group() {
+    setsid "$@" &
+    ACTIVE_PROCESS_GROUP=$!
+    wait_for_active_group
+}
+
+run_in_group_logged() {
+    setsid "$@" >> "$LOG_FILE" 2>&1 &
+    ACTIVE_PROCESS_GROUP=$!
+    wait_for_active_group
+}
+
+run_in_group_capture() {
+    local output_file="$1"
+    shift
+    setsid "$@" > "$output_file" 2>> "$LOG_FILE" &
+    ACTIVE_PROCESS_GROUP=$!
+    wait_for_active_group
+}
+
+run_in_group_combined() {
+    local output_file="$1"
+    shift
+    setsid "$@" > "$output_file" 2>&1 &
+    ACTIVE_PROCESS_GROUP=$!
+    wait_for_active_group
 }
 
 shell_join() {
@@ -229,6 +307,13 @@ run_zimbra() {
     run_in_group su - "$ZIMBRA_USER" -c "$command"
 }
 
+run_zimbra_capture() {
+    local output_file="$1" command
+    shift
+    command="$(shell_join "$@")"
+    run_in_group_capture "$output_file" su - "$ZIMBRA_USER" -c "$command"
+}
+
 CERTMGR_AS_ROOT=0
 run_certmgr() {
     if [[ "$CERTMGR_AS_ROOT" -eq 1 ]]; then
@@ -239,7 +324,26 @@ run_certmgr() {
 }
 
 run_certmgr_logged() {
-    run_certmgr "$@" > >(tee -a "$LOG_FILE") 2>&1
+    if [[ "$VERBOSE" -eq 1 ]]; then
+        run_certmgr "$@" > >(tee -a "$LOG_FILE") 2>&1
+    elif [[ "$CERTMGR_AS_ROOT" -eq 1 ]]; then
+        run_in_group_logged "$ZMCERTMGR" "$@"
+    else
+        local command
+        command="$(shell_join "$ZMCERTMGR" "$@")"
+        run_in_group_logged su - "$ZIMBRA_USER" -c "$command"
+    fi
+}
+
+run_certmgr_combined() {
+    local output_file="$1" command
+    shift
+    if [[ "$CERTMGR_AS_ROOT" -eq 1 ]]; then
+        run_in_group_combined "$output_file" "$ZMCERTMGR" "$@"
+    else
+        command="$(shell_join "$ZMCERTMGR" "$@")"
+        run_in_group_combined "$output_file" su - "$ZIMBRA_USER" -c "$command"
+    fi
 }
 
 terminate_active_group() {
@@ -458,8 +562,19 @@ fi
 
 log "Zimbra SSL migration started."
 log "Source: $REMOTE"
-log "Target: $(hostname -f 2>/dev/null || hostname)"
+TARGET_SYSTEM_HOST="$(hostname -f 2>/dev/null || hostname)"
+log "Target: $TARGET_SYSTEM_HOST"
 log "Log: $LOG_FILE"
+
+if [[ "$VERIFY_ONLY" -eq 1 ]]; then
+    RUN_MODE="verify only"
+    TOTAL_PHASES=4
+else
+    RUN_MODE="deploy"
+    TOTAL_PHASES=7
+fi
+ui_banner "$RUN_MODE" "$REMOTE" "$TARGET_SYSTEM_HOST" "$LOG_FILE"
+phase 1 "$TOTAL_PHASES" "Destination preflight"
 
 # ---------------------------------------------------------------------------
 # SOURCE AND DESTINATION DISCOVERY
@@ -470,12 +585,12 @@ TARGET_VERSION_OUTPUT="${STAGE_DIR}/target-version.out"
 SOURCE_HOST_OUTPUT="${STAGE_DIR}/source-host.out"
 SOURCE_VERSION_OUTPUT="${STAGE_DIR}/source-version.out"
 
-run_zimbra "$ZMHOSTNAME" > "$TARGET_HOST_OUTPUT" 2>/dev/null || \
+run_zimbra_capture "$TARGET_HOST_OUTPUT" "$ZMHOSTNAME" || \
     die "Could not determine destination Zimbra hostname."
 TARGET_ZMHOST="$(tail -n1 "$TARGET_HOST_OUTPUT" | tr -d '\r')"
 [[ -n "$TARGET_ZMHOST" ]] || die "Destination zmhostname returned an empty value."
 
-if run_zimbra "$ZMCONTROL" -v > "$TARGET_VERSION_OUTPUT" 2>/dev/null; then
+if run_zimbra_capture "$TARGET_VERSION_OUTPUT" "$ZMCONTROL" -v; then
     TARGET_ZMVER="$(tail -n1 "$TARGET_VERSION_OUTPUT" | tr -d '\r')"
 else
     TARGET_ZMVER=""
@@ -491,17 +606,21 @@ if [[ "$TARGET_ZMVER" =~ [Rr]elease[[:space:]]+([0-9]+)\.([0-9]+) ]]; then
         CERTMGR_AS_ROOT=1
         KEY_MODE=0740
         log "Detected pre-8.7 Zimbra; zmcertmgr will run as root."
+        ok "Zimbra ${ZCS_MAJOR}.${ZCS_MINOR}: certificate manager will run as root."
     else
         log "Detected Zimbra 8.7+; zmcertmgr will run as $ZIMBRA_USER."
+        ok "Zimbra ${ZCS_MAJOR}.${ZCS_MINOR}: certificate manager will run as $ZIMBRA_USER."
     fi
 else
     warn "Could not parse the Zimbra version; using the Zimbra 8.7+ zmcertmgr mode."
 fi
 
+phase 2 "$TOTAL_PHASES" "Source access and secure transfer"
 log "Testing SSH connectivity and host-key trust..."
 SSH_TEST_OUTPUT="${STAGE_DIR}/ssh-test.out"
-if ! run_in_group ssh "${SSH_OPTS[@]}" "$REMOTE" "printf 'SSH_OK\\n'" > "$SSH_TEST_OUTPUT"; then
-    die "SSH connection failed for $REMOTE. Verify authentication and known_hosts."
+if ! run_in_group_capture "$SSH_TEST_OUTPUT" \
+        ssh "${SSH_OPTS[@]}" "$REMOTE" "printf 'SSH_OK\\n'"; then
+    die "SSH authentication failed for $REMOTE; verify the identity and known_hosts (details: $LOG_FILE)."
 fi
 grep -Fqx 'SSH_OK' "$SSH_TEST_OUTPUT" || \
     die "Unexpected response from source SSH endpoint: $REMOTE"
@@ -509,12 +628,14 @@ ok "SSH connection and source host-key verification succeeded."
 
 REMOTE_HOST_CMD="$(shell_join "$REMOTE_ZMHOSTNAME")"
 REMOTE_VERSION_CMD="$(shell_join "$REMOTE_ZMCONTROL" -v)"
-if run_in_group ssh "${SSH_OPTS[@]}" "$REMOTE" "$REMOTE_HOST_CMD" > "$SOURCE_HOST_OUTPUT" 2>/dev/null; then
+if run_in_group_capture "$SOURCE_HOST_OUTPUT" \
+        ssh "${SSH_OPTS[@]}" "$REMOTE" "$REMOTE_HOST_CMD"; then
     SOURCE_ZMHOST="$(tail -n1 "$SOURCE_HOST_OUTPUT" | tr -d '\r')"
 else
     SOURCE_ZMHOST=""
 fi
-if run_in_group ssh "${SSH_OPTS[@]}" "$REMOTE" "$REMOTE_VERSION_CMD" > "$SOURCE_VERSION_OUTPUT" 2>/dev/null; then
+if run_in_group_capture "$SOURCE_VERSION_OUTPUT" \
+        ssh "${SSH_OPTS[@]}" "$REMOTE" "$REMOTE_VERSION_CMD"; then
     SOURCE_ZMVER="$(tail -n1 "$SOURCE_VERSION_OUTPUT" | tr -d '\r')"
 else
     SOURCE_ZMVER=""
@@ -533,15 +654,15 @@ REMOTE_CA="${REMOTE_COMM_DIR}/commercial_ca.crt"
 log "Checking source certificate files..."
 for remote_file in "$REMOTE_KEY" "$REMOTE_CRT" "$REMOTE_CA"; do
     printf -v REMOTE_CHECK_CMD 'test -s %q && test -r %q' "$remote_file" "$remote_file"
-    run_in_group ssh "${SSH_OPTS[@]}" "$REMOTE" "$REMOTE_CHECK_CMD" || \
+    run_in_group_logged ssh "${SSH_OPTS[@]}" "$REMOTE" "$REMOTE_CHECK_CMD" || \
         die "Source file is missing, empty, or unreadable by $OLD_USER: $remote_file"
 done
 ok "Source key, leaf certificate, and CA chain are readable."
 
 REMOTE_KEY_MODE_OUTPUT="${STAGE_DIR}/remote-key-mode.out"
 printf -v REMOTE_KEY_MODE_CMD 'stat -c %%a -- %q' "$REMOTE_KEY"
-run_in_group ssh "${SSH_OPTS[@]}" "$REMOTE" "$REMOTE_KEY_MODE_CMD" \
-    > "$REMOTE_KEY_MODE_OUTPUT" 2>/dev/null || \
+run_in_group_capture "$REMOTE_KEY_MODE_OUTPUT" \
+    ssh "${SSH_OPTS[@]}" "$REMOTE" "$REMOTE_KEY_MODE_CMD" || \
     die "Could not inspect source commercial.key permissions."
 REMOTE_KEY_MODE="$(tail -n1 "$REMOTE_KEY_MODE_OUTPUT" | tr -d '\r')"
 [[ "$REMOTE_KEY_MODE" =~ ^[0-7]{3,4}$ ]] || \
@@ -559,12 +680,13 @@ LEAF_CRT="${STAGE_DIR}/commercial.crt"
 CHAIN_CRT="${STAGE_DIR}/commercial_ca.crt"
 
 log "Downloading certificate material into the private staging directory..."
-run_in_group scp "${SCP_OPTS[@]}" "${REMOTE}:${REMOTE_KEY}" "$RAW_KEY" >/dev/null || \
+run_in_group_logged scp "${SCP_OPTS[@]}" "${REMOTE}:${REMOTE_KEY}" "$RAW_KEY" || \
     die "Could not download source commercial.key."
-run_in_group scp "${SCP_OPTS[@]}" "${REMOTE}:${REMOTE_CRT}" "$RAW_CRT" >/dev/null || \
+run_in_group_logged scp "${SCP_OPTS[@]}" "${REMOTE}:${REMOTE_CRT}" "$RAW_CRT" || \
     die "Could not download source commercial.crt."
-run_in_group scp "${SCP_OPTS[@]}" "${REMOTE}:${REMOTE_CA}" "$RAW_CA" >/dev/null || \
+run_in_group_logged scp "${SCP_OPTS[@]}" "${REMOTE}:${REMOTE_CA}" "$RAW_CA" || \
     die "Could not download source commercial_ca.crt."
+ok "Certificate files transferred to the private staging area."
 
 chmod 600 "$RAW_KEY" "$RAW_CRT" "$RAW_CA"
 cp -- "$RAW_KEY" "$STAGED_KEY"
@@ -598,12 +720,14 @@ chown -R "$ZIMBRA_USER:$ZIMBRA_GROUP" "$STAGE_DIR"
 chmod 700 "$STAGE_DIR"
 chmod 600 "$STAGED_KEY" "$LEAF_CRT" "$CHAIN_CRT" "$RAW_KEY" "$RAW_CRT" "$RAW_CA"
 
+phase 3 "$TOTAL_PHASES" "Cryptographic validation"
 log "Validating certificate syntax, trust chain, time, and private key..."
-openssl x509 -in "$LEAF_CRT" -noout >/dev/null || \
+openssl x509 -in "$LEAF_CRT" -noout >> "$LOG_FILE" 2>&1 || \
     die "Leaf certificate is not a valid X.509 PEM certificate."
 openssl pkey -in "$STAGED_KEY" -noout -passin pass: >/dev/null 2>&1 || \
     die "Private key is invalid or encrypted; Zimbra requires non-interactive access."
-openssl verify -purpose sslserver -CAfile "$CHAIN_CRT" "$LEAF_CRT" >/dev/null || \
+openssl verify -purpose sslserver -CAfile "$CHAIN_CRT" "$LEAF_CRT" \
+    >> "$LOG_FILE" 2>&1 || \
     die "OpenSSL could not build a currently valid server-certificate chain."
 
 KEY_PUB_HASH="$(
@@ -637,12 +761,13 @@ if ! openssl x509 -in "$LEAF_CRT" -checkend "$WARN_SECONDS" -noout >/dev/null; t
     warn "Certificate expires within $MIN_WARN_DAYS days."
 fi
 
+phase 4 "$TOTAL_PHASES" "Zimbra compatibility"
 log "Checking certificate against destination zmhostname: $TARGET_ZMHOST"
 if openssl x509 -in "$LEAF_CRT" -checkhost "$TARGET_ZMHOST" -noout >/dev/null 2>&1; then
     ok "Certificate matches destination zmhostname: $TARGET_ZMHOST"
 else
     warn "Certificate does not match destination zmhostname: $TARGET_ZMHOST"
-    openssl x509 -in "$LEAF_CRT" -noout -ext subjectAltName 2>/dev/null | tee -a "$LOG_FILE" || true
+    openssl x509 -in "$LEAF_CRT" -noout -ext subjectAltName >> "$LOG_FILE" 2>&1 || true
     [[ "$ALLOW_HOSTNAME_MISMATCH" -eq 1 ]] || \
         die "Hostname mismatch; use --allow-hostname-mismatch only when explicitly intended."
     warn "Hostname mismatch was explicitly accepted by the operator."
@@ -663,6 +788,7 @@ fi
 # VERIFIED BACKUP AND ROLLBACK PREPARATION
 # ---------------------------------------------------------------------------
 
+phase 5 "$TOTAL_PHASES" "Verified destination backup"
 BACKUP_DIR="$(mktemp -d "$BACKUP_ROOT/${START_TS}.XXXXXXXX")"
 chmod 700 "$BACKUP_DIR"
 BACKUP_TAR="${BACKUP_DIR}/zimbra-ssl-predeploy.tar.gz"
@@ -730,10 +856,11 @@ done
 [[ ${#EXISTING_BACKUP_PATHS[@]} -gt 0 ]] || die "No destination SSL path was available to back up."
 
 log "Creating pre-deployment backup: $BACKUP_TAR"
-run_in_group tar -C / -czpf "$BACKUP_TAR" "${EXISTING_BACKUP_PATHS[@]}" || \
+run_in_group_logged tar -C / -czpf "$BACKUP_TAR" "${EXISTING_BACKUP_PATHS[@]}" || \
     die "Could not create the pre-deployment backup."
 chmod 600 "$BACKUP_TAR" "$ROLLBACK_ABSENT_FILE"
-run_in_group tar -tzf "$BACKUP_TAR" > "${BACKUP_DIR}/archive-manifest.txt" || \
+run_in_group_capture "${BACKUP_DIR}/archive-manifest.txt" \
+    tar -tzf "$BACKUP_TAR" || \
     die "The pre-deployment backup failed its archive integrity check."
 sha256sum "$BACKUP_TAR" > "${BACKUP_TAR}.sha256"
 chmod 600 "${BACKUP_DIR}/archive-manifest.txt" "${BACKUP_TAR}.sha256"
@@ -754,8 +881,8 @@ if [[ -s "$CURRENT_KEY" && -s "$CURRENT_CRT" && -s "$CURRENT_CA" ]]; then
     cp -- "$CURRENT_CA" "$ROLLBACK_CHAIN"
     chown "$ZIMBRA_USER:$ZIMBRA_GROUP" "$ROLLBACK_LEAF" "$ROLLBACK_CHAIN"
     chmod 600 "$ROLLBACK_LEAF" "$ROLLBACK_CHAIN"
-    if run_certmgr verifycrt comm "$CURRENT_KEY" "$ROLLBACK_LEAF" "$ROLLBACK_CHAIN" \
-            > "${BACKUP_DIR}/rollback-verification.log" 2>&1; then
+    if run_certmgr_combined "${BACKUP_DIR}/rollback-verification.log" \
+            verifycrt comm "$CURRENT_KEY" "$ROLLBACK_LEAF" "$ROLLBACK_CHAIN"; then
         ROLLBACK_NATIVE_READY=1
     else
         warn "The existing certificate cannot be used for Zimbra-native rollback; file rollback remains available."
@@ -783,6 +910,7 @@ ok "Verified pre-deployment backup created: $BACKUP_TAR"
 # TRANSACTIONAL INSTALL, DEPLOYMENT, AND POST-DEPLOY VERIFICATION
 # ---------------------------------------------------------------------------
 
+phase 6 "$TOTAL_PHASES" "Certificate deployment"
 TRANSACTION_ACTIVE=1
 log "Installing the validated private key in the destination commercial directory..."
 install -o "$ZIMBRA_USER" -g "$ZIMBRA_GROUP" -m "$KEY_MODE" \
@@ -803,7 +931,9 @@ run_certmgr_logged verifycrt comm "${LOCAL_COMM_DIR}/commercial.key" "$LEAF_CRT"
 log "Deploying the certificate with zmcertmgr..."
 run_certmgr_logged deploycrt comm "$LEAF_CRT" "$CHAIN_CRT" || \
     die "zmcertmgr deployment failed. Automatic rollback will now run."
+ok "zmcertmgr deployment completed."
 
+phase 7 "$TOTAL_PHASES" "Post-deployment verification"
 log "Running Zimbra post-deployment inspection..."
 run_certmgr_logged viewdeployedcrt || \
     die "viewdeployedcrt failed after deployment. Automatic rollback will now run."
@@ -826,7 +956,8 @@ chmod 600 "$DEPLOYED_LEAF"
 DEPLOYED_FINGERPRINT="$(openssl x509 -in "$DEPLOYED_LEAF" -outform DER | sha256sum | awk '{print $1}')"
 [[ "$DEPLOYED_FINGERPRINT" == "$INCOMING_FINGERPRINT" ]] || \
     die "Deployed certificate fingerprint does not match the incoming certificate."
-openssl verify -purpose sslserver -CAfile "$DEPLOYED_CA" "$DEPLOYED_LEAF" >/dev/null || \
+openssl verify -purpose sslserver -CAfile "$DEPLOYED_CA" "$DEPLOYED_LEAF" \
+    >> "$LOG_FILE" 2>&1 || \
     die "The deployed certificate chain failed post-deployment verification."
 DEPLOYED_KEY_HASH="$(
     openssl pkey -in "${LOCAL_COMM_DIR}/commercial.key" -passin pass: \

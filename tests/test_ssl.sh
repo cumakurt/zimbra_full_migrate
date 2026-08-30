@@ -142,6 +142,7 @@ test_static_and_cli() {
 
     "$SCRIPT" --help > "$output"
     assert_contains "$output" 'The script never restarts Zimbra services.'
+    assert_contains "$output" '--verbose'
 
     set +o errexit
     "$SCRIPT" --old > "$output" 2>&1
@@ -208,6 +209,13 @@ test_successful_deployment() {
     fi
     assert_contains "$TEST_TMP/success.out" 'post-deployment verification succeeded'
     assert_contains "$TEST_TMP/success.out" 'SERVICES WERE NOT RESTARTED.'
+    assert_contains "$TEST_TMP/success.out" '[1/7] Destination preflight'
+    if grep -Eq '^\[[0-9]{4}-[0-9]{2}-[0-9]{2} ' "$TEST_TMP/success.out"; then
+        fail 'quiet console output contains timestamped detail lines'
+    fi
+    if grep -Fq 'Fake deployment complete.' "$TEST_TMP/success.out"; then
+        fail 'quiet console output exposed raw zmcertmgr details'
+    fi
 }
 
 test_legacy_zimbra_mode() {
@@ -222,7 +230,27 @@ test_legacy_zimbra_mode() {
 
     mode="$(stat -c '%a' "$fake_home/ssl/zimbra/commercial/commercial.key")"
     [[ "$mode" == "740" ]] || fail "legacy commercial.key mode is $mode instead of 740"
-    assert_contains "$TEST_TMP/legacy.out" 'Detected pre-8.7 Zimbra; zmcertmgr will run as root.'
+    assert_contains "$TEST_TMP/legacy.out" 'Zimbra 8.6: certificate manager will run as root.'
+}
+
+test_ssh_error_is_concise() {
+    local fake_home="$TEST_TMP/ssh-error-home" run_root="$TEST_TMP/ssh-error-run"
+    local rc log_file
+    prepare_fake_home "$fake_home"
+
+    set +o errexit
+    FAKE_SSH_FAIL=1 run_ssl "$fake_home" "$run_root" "$TEST_TMP/ssh-error.out" --verify-only
+    rc=$?
+    set -o errexit
+
+    [[ "$rc" -eq 1 ]] || fail "failed SSH returned $rc instead of 1"
+    assert_contains "$TEST_TMP/ssh-error.out" 'SSH authentication failed for zimbra@source.example.test'
+    if grep -Fq 'Permission denied (publickey,password).' "$TEST_TMP/ssh-error.out"; then
+        fail 'quiet SSH failure printed raw command noise on the console'
+    fi
+    log_file="$(find "$run_root/logs" -type f -name '*.log' -print -quit)"
+    [[ -n "$log_file" ]] || fail 'SSH failure did not create a log'
+    assert_contains "$log_file" 'Permission denied (publickey,password).'
 }
 
 test_failed_deployment_rolls_back() {
@@ -409,6 +437,7 @@ test_static_and_cli
 test_verify_only
 test_successful_deployment
 test_legacy_zimbra_mode
+test_ssh_error_is_concise
 test_failed_deployment_rolls_back
 test_interrupt_and_lock
 test_deploy_interrupt_rolls_back
