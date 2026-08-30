@@ -1,10 +1,10 @@
 # Zimbra DKIM Migrasyonu
 
-[English](README-DKIM.md) · [Türkçe](README-DKIM.tr.md)
+[English](README-DKIM.md) · [Türkçe](README-DKIM.tr.md) · [Index](README.tr.md)
 
 `zimbra_dkim_migrate.sh`, eski Zimbra sunucusundaki mevcut DKIM seçicilerini, kimliklerini ve özel anahtarlarını yeni Zimbra sunucusuna kopyalar. Her anahtar çiftini doğrular, isteğe bağlı olarak genel DNS’i kontrol eder, LDAP özniteliklerini içe aktarır, sonucu doğrular ve Zimbra servislerini restart etmez.
 
-Bu belge yalnızca `zimbra_dkim_migrate.sh` içindir. Tenant/mailbox ve SSL migrasyon script’lerinin dokümantasyonu ayrıdır.
+Bu belge yalnızca `zimbra_dkim_migrate.sh` içindir. Diğer araçlar için [dokümantasyon dizinine](README.tr.md) bakın.
 
 > **Kullanım riski ve tüm operasyonel sorumluluk aracı kullanan kişiye/kuruma aittir.** Bu script DKIM özel anahtarlarını işler ve canlı Zimbra LDAP domain özniteliklerini değiştirir. Yetkilendirme, anahtar güvenliği, SSH host doğrulaması, DNS, yedekleme, test, uyumluluk, değişiklik onayı, kesinti, geri dönüş, servis restart’ı ve giden posta kimlik doğrulamasından yalnızca script’i çalıştıran kişi veya kurum sorumludur. Yazılım hiçbir garanti verilmeden sunulur; yürürlükteki hukukun izin verdiği azami ölçüde geliştirici ve katkıda bulunanlar veri kaybı, anahtar ifşası, kesinti, başarısız geri dönüş, güvenlik olayı veya doğrudan/dolaylı zarardan sorumlu tutulamaz. [LICENSE](LICENSE) dosyasına bakın.
 

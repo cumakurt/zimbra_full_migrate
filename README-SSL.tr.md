@@ -1,10 +1,10 @@
 # Zimbra SSL Migrasyonu
 
-[English](README-SSL.md) · [Türkçe](README-SSL.tr.md)
+[English](README-SSL.md) · [Türkçe](README-SSL.tr.md) · [Index](README.tr.md)
 
 `zimbra_ssl_migrate.sh`, eski bir Zimbra sunucusunda kullanımda olan ticari veya Let's Encrypt sertifika setini güvenli biçimde yeni Zimbra sunucusuna taşır. Hedefte değişiklik yapmadan önce sertifikayı, özel anahtarı, CA zincirini, geçerlilik zamanını, hostname eşleşmesini ve Zimbra uyumluluğunu doğrular.
 
-Bu belge yalnızca `zimbra_ssl_migrate.sh` içindir. Tenant/mailbox migrasyon script’inin dokümantasyonu ayrıdır.
+Bu belge yalnızca `zimbra_ssl_migrate.sh` içindir. Diğer araçlar için [dokümantasyon dizinine](README.tr.md) bakın.
 
 > **Kullanım riski ve tüm operasyonel sorumluluk aracı kullanan kişiye/kuruma aittir.** Bu script canlı TLS özel anahtarlarını işler; etkin Zimbra sertifika dosyalarını ve yapılandırmasını değiştirir. Yetkilendirme, anahtar güvenliği, SSH host doğrulaması, yedekleme, test, uyumluluk, değişiklik onayı, kesinti, geri dönüş, servis restart’ı, sertifika yenileme, mevzuata uyum ve istemcilere açık bütün servislerin doğrulanmasından yalnızca script’i çalıştıran kişi veya kurum sorumludur. Yazılım hiçbir garanti verilmeden sunulur; yürürlükteki hukukun izin verdiği azami ölçüde geliştirici ve katkıda bulunanlar veri kaybı, anahtar ifşası, kesinti, başarısız geri dönüş, güvenlik olayı veya doğrudan/dolaylı zarardan sorumlu tutulamaz. [LICENSE](LICENSE) dosyasına bakın.
 

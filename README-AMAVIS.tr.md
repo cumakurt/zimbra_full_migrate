@@ -1,10 +1,10 @@
 # Zimbra Amavis OpenSSL Otomatik Onarım
 
-[English](README-AMAVIS.md) · [Türkçe](README-AMAVIS.tr.md)
+[English](README-AMAVIS.md) · [Türkçe](README-AMAVIS.tr.md) · [Index](README.tr.md)
 
 `zimbra_amavis_openssl_autofix.sh`, Zimbra sunucusundaki belirli bir Amavis başlangıç hatasını teşhis eder: `Net::SSLeay`, Zimbra’nın `libssl.so.3` kütüphanesini işletim sisteminin `libcrypto.so.3` kütüphanesiyle birlikte yükler ve `OPENSSL_x.y.z not found` ile çıkar. Bu eşleşme tam olarak yeniden üretildiğinde script, `zmamavisdctl` içine idempotent bir `LD_LIBRARY_PATH` düzeltmesi ekler, sözdizimini doğrular ve **yalnızca Amavis’i** yeniden başlatır.
 
-Bu belge yalnızca `zimbra_amavis_openssl_autofix.sh` içindir. Tenant/mailbox, SSL ve DKIM migrasyon script’lerinin dokümantasyonu ayrıdır.
+Bu belge yalnızca `zimbra_amavis_openssl_autofix.sh` içindir. Diğer araçlar için [dokümantasyon dizinine](README.tr.md) bakın.
 
 > **Kullanım riski ve tüm operasyonel sorumluluk aracı kullanan kişiye/kuruma aittir.** Bu script bir Zimbra kontrol dosyasını değiştirir ve Amavis’i yeniden başlatabilir. Yetkilendirme, değişiklik onayı, yedekleme, test, uyumluluk, kesinti, geri dönüş, posta akışı doğrulaması ve kuyruk flush işleminden yalnızca script’i çalıştıran kişi veya kurum sorumludur. Yazılım hiçbir garanti verilmeden sunulur; yürürlükteki hukukun izin verdiği azami ölçüde geliştirici ve katkıda bulunanlar veri kaybı, kesinti, başarısız geri dönüş, güvenlik olayı veya doğrudan/dolaylı zarardan sorumlu tutulamaz. [LICENSE](LICENSE) dosyasına bakın.
 

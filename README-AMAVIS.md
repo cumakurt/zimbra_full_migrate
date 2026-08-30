@@ -1,10 +1,10 @@
 # Zimbra Amavis OpenSSL Autofix
 
-[English](README-AMAVIS.md) · [Türkçe](README-AMAVIS.tr.md)
+[English](README-AMAVIS.md) · [Türkçe](README-AMAVIS.tr.md) · [Index](README.md)
 
 `zimbra_amavis_openssl_autofix.sh` diagnoses a specific Amavis startup failure on a Zimbra host: `Net::SSLeay` loads Zimbra's `libssl.so.3` together with the operating system's `libcrypto.so.3` and exits with `OPENSSL_x.y.z not found`. When that exact mismatch is reproduced, the script inserts an idempotent `LD_LIBRARY_PATH` fix into `zmamavisdctl`, validates syntax, and restarts **Amavis only**.
 
-This document applies only to `zimbra_amavis_openssl_autofix.sh`. Tenant/mailbox, SSL, and DKIM migration scripts have separate documentation.
+This document applies only to `zimbra_amavis_openssl_autofix.sh`. See the [documentation index](README.md) for the other tools.
 
 > **Use at your own risk — all operational responsibility belongs to the operator.** This script modifies a Zimbra control script and can restart Amavis. The person or organization running it is solely responsible for authorization, change approval, backups, testing, compatibility, downtime, rollback, mail-flow validation, and any queue flush. The software is provided without warranty; to the maximum extent permitted by applicable law, the author and contributors are not liable for data loss, outage, failed rollback, security incidents, or direct/indirect damage. See [LICENSE](LICENSE).
 

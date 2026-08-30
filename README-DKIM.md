@@ -1,10 +1,10 @@
 # Zimbra DKIM Migration
 
-[English](README-DKIM.md) · [Türkçe](README-DKIM.tr.md)
+[English](README-DKIM.md) · [Türkçe](README-DKIM.tr.md) · [Index](README.md)
 
 `zimbra_dkim_migrate.sh` copies already deployed DKIM selectors, identities, and private keys from an old Zimbra server to a new Zimbra server. It validates each key pair, optionally checks public DNS, imports LDAP attributes, verifies the result, and never restarts Zimbra services.
 
-This document applies only to `zimbra_dkim_migrate.sh`. Tenant/mailbox and SSL migration scripts have separate documentation.
+This document applies only to `zimbra_dkim_migrate.sh`. See the [documentation index](README.md) for the other tools.
 
 > **Use at your own risk — all operational responsibility belongs to the operator.** This script handles DKIM private keys and changes live Zimbra LDAP domain attributes. The person or organization running it is solely responsible for authorization, key custody, SSH host verification, DNS, backups, testing, compatibility, change approval, downtime, rollback, service restart, and validation of outbound mail authentication. The software is provided without warranty; to the maximum extent permitted by applicable law, the author and contributors are not liable for data loss, key exposure, outage, failed rollback, security incidents, or direct/indirect damage. See [LICENSE](LICENSE).
 

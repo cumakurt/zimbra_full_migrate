@@ -1,10 +1,10 @@
 # Zimbra SSL Migration
 
-[English](README-SSL.md) · [Türkçe](README-SSL.tr.md)
+[English](README-SSL.md) · [Türkçe](README-SSL.tr.md) · [Index](README.md)
 
 `zimbra_ssl_migrate.sh` securely transfers an already deployed commercial or Let's Encrypt certificate set from an old Zimbra server to a new Zimbra server. It validates the certificate, key, CA chain, validity period, hostname, and Zimbra compatibility before changing the destination.
 
-This document applies only to `zimbra_ssl_migrate.sh`. The tenant/mailbox migration script has separate documentation.
+This document applies only to `zimbra_ssl_migrate.sh`. See the [documentation index](README.md) for the other tools.
 
 > **Use at your own risk — all operational responsibility belongs to the operator.** This script handles live TLS private keys and changes active Zimbra certificate files and configuration. The person or organization running it is solely responsible for authorization, key custody, SSH host verification, backups, testing, compatibility, change approval, downtime, rollback, service restart, certificate renewal, regulatory compliance, and validation of every client-facing service. The software is provided without warranty; to the maximum extent permitted by applicable law, the author and contributors are not liable for data loss, key exposure, outage, failed rollback, security incidents, or direct/indirect damage. See [LICENSE](LICENSE).
 
