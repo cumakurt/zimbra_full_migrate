@@ -455,12 +455,14 @@ extract_pub() {
 }
 
 extract_p() {
+    # zmdkimkeyutil prints BIND-style TXT: "p=MIIB...AQAB" ) ; ----- DKIM ...
+    # Take only the base64 alphabet so a trailing ')' or comment is not part of p=.
     perl -0777 -ne '
         $x = $_;
         $x =~ s/\r//g;
         $x =~ s/"//g;
         $x =~ s/[[:space:]]+//g;
-        if ($x =~ /p=([^;]+)/i) { print $1 }
+        if ($x =~ /p=([A-Za-z0-9+\/=_-]+)/i) { print $1 }
     ' "$1"
 }
 
@@ -470,6 +472,59 @@ derive_p() {
     else
         openssl pkey -in "$1" -pubout -outform DER 2>/dev/null | openssl base64 -A
     fi
+}
+
+decode_base64_der() {
+    local b64="$1" dest="$2"
+    if command -v base64 >/dev/null; then
+        printf '%s' "$b64" | base64 -d > "$dest" 2>/dev/null || return 1
+    else
+        printf '%s' "$b64" | openssl base64 -d -A > "$dest" 2>/dev/null || return 1
+    fi
+    [[ -s "$dest" ]]
+}
+
+public_der_hash_from_file() {
+    openssl pkey -pubin -inform DER -in "$1" -pubout -outform DER 2>/dev/null |
+        sha256sum | awk '{print $1}'
+}
+
+public_der_hash_from_private() {
+    openssl pkey -in "$1" -pubout -outform DER 2>/dev/null |
+        sha256sum | awk '{print $1}'
+}
+
+public_der_hash_from_p() {
+    local b64="$1" der pem hash
+    der="$(mktemp "${RUN_DIR:-/tmp}/dkim-pub.XXXXXX")"
+    pem="${der}.pem"
+    decode_base64_der "$b64" "$der" || { rm -f -- "$der" "$pem"; return 1; }
+    hash="$(public_der_hash_from_file "$der")"
+    if [[ -z "$hash" ]]; then
+        {
+            printf '%s\n' '-----BEGIN PUBLIC KEY-----'
+            printf '%s\n' "$b64" | fold -w 64
+            printf '%s\n' '-----END PUBLIC KEY-----'
+        } > "$pem"
+        hash="$(
+            openssl pkey -pubin -in "$pem" -pubout -outform DER 2>/dev/null |
+                sha256sum | awk '{print $1}'
+        )"
+    fi
+    if [[ -z "$hash" ]]; then
+        {
+            printf '%s\n' '-----BEGIN RSA PUBLIC KEY-----'
+            printf '%s\n' "$b64" | fold -w 64
+            printf '%s\n' '-----END RSA PUBLIC KEY-----'
+        } > "$pem"
+        hash="$(
+            openssl pkey -pubin -in "$pem" -pubout -outform DER 2>/dev/null |
+                sha256sum | awk '{print $1}'
+        )"
+    fi
+    rm -f -- "$der" "$pem"
+    [[ -n "$hash" ]] || return 1
+    printf '%s\n' "$hash"
 }
 
 norm() {
@@ -490,6 +545,7 @@ parse_raw() {
 
 validate_parsed() {
     local expect="$1" parsed="$2" domain selector identity derived stored bits
+    local derived_hash stored_hash
     domain="$(<"$parsed/domain")"
     selector="$(<"$parsed/selector")"
     identity="$(<"$parsed/identity")"
@@ -505,7 +561,11 @@ validate_parsed() {
     stored="$(norm "$(extract_p "$parsed/public.txt" || true)")"
     [[ -n "$derived" ]] || return 19
     [[ -n "$stored" ]] || return 20
-    [[ "$derived" == "$stored" ]] || return 21
+    derived_hash="$(public_der_hash_from_private "$parsed/private.key" || true)"
+    stored_hash="$(public_der_hash_from_p "$stored" || true)"
+    if [[ "$derived" != "$stored" && ( -z "$derived_hash" || "$derived_hash" != "$stored_hash" ) ]]; then
+        return 21
+    fi
     [[ -n "$identity" ]] || return 22
     bits="$(
         openssl pkey -in "$parsed/private.key" -text -noout 2>/dev/null |
@@ -556,7 +616,7 @@ dns_p() {
         $x =~ s/\r//g;
         $x =~ s/"//g;
         $x =~ s/[[:space:]]+//g;
-        if ($x =~ /p=([^;]+)/i) { print $1 }
+        if ($x =~ /p=([A-Za-z0-9+\/=_-]+)/i) { print $1 }
     '
 }
 

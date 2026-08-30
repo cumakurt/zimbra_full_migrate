@@ -51,6 +51,29 @@ DKIM Identity: ${domain}
 EOF
 }
 
+write_bind_query() {
+    local domain="$1" dest="$2" key p_value mid
+    key="$TEST_TMP/${domain}.bind.key"
+    openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$key" \
+        >/dev/null 2>&1
+    p_value="$(openssl pkey -in "$key" -pubout -outform DER 2>/dev/null | base64 | tr -d '\r\n')"
+    mid=$(( ${#p_value} / 2 ))
+    cat > "$dest" <<EOF
+DKIM Domain:
+${domain}
+DKIM Selector:
+mail
+DKIM Private Key:
+$(cat "$key")
+DKIM Public Signature:
+mail._domainkey IN TXT ( "v=DKIM1; k=rsa; "
+          "p=${p_value:0:mid}"
+          "${p_value:mid}" )  ; ----- DKIM key mail for ${domain}
+DKIM Identity:
+${domain}
+EOF
+}
+
 prepare_homes() {
     local command_name
     mkdir -p \
@@ -168,6 +191,19 @@ test_already_identical() {
     assert_contains "$TEST_TMP/same.out" 'already identical'
 }
 
+test_bind_style_public_signature() {
+    write_bind_query example.com "$STORE/example.com.query"
+    rm -f "$LIVE/example.com.query"
+    run_dkim "$TEST_TMP/bind.out" --dry-run || {
+        sed -n '1,240p' "$TEST_TMP/bind.out" >&2
+        fail 'BIND-style DKIM public signature dry-run failed'
+    }
+    assert_contains "$TEST_TMP/bind.out" 'dry-run only'
+    if grep -Fq 'stored public key does not match' "$TEST_TMP/bind.out"; then
+        fail 'BIND-style public signature was rejected as a key mismatch'
+    fi
+}
+
 test_ssh_error_is_concise() {
     local rc
     write_query example.com "$STORE/example.com.query"
@@ -189,6 +225,7 @@ test_static_and_cli
 test_dry_run
 test_successful_import
 test_already_identical
+test_bind_style_public_signature
 test_ssh_error_is_concise
 
 printf 'All DKIM migration tests passed.\n'
