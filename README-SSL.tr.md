@@ -119,7 +119,57 @@ Migrasyon script’inin varsayılanı `StrictHostKeyChecking=yes` değeridir. G�
 
 ### 4. Açık anahtarı eski sunucuya aktarın
 
-**Yeni sunucudaki** root shell’e dönüp `ssh-copy-id` kullanın. Yeni oturum açtıysanız önce değişkenleri tekrar ayarlayın:
+Migrasyon script’i kaynak sunucuya `zimbra@` ile bağlanır; bu yüzden açık anahtarın eski sunucudaki `zimbra` kullanıcısının `authorized_keys` dosyasına eklenmesi gerekir. Birçok Zimbra kurulumunda `zimbra` parolası yoktur veya parola ile SSH kapalıdır; bu durumda `ssh-copy-id zimbra@...` **çalışmaz**.
+
+**Önerilen yol:** Yeni sunucudan, zaten çalışan **root SSH erişiminizi** kullanarak açık anahtarı uzaktan kurun. Bu adımda root bağlantısı için mevcut root SSH kimliğiniz kullanılır; `SSL_MIGRATE_KEY` yalnızca kurulacak açık anahtar dosyasıdır ve sonraki `zimbra@` bağlantıları için kullanılır.
+
+**Yeni sunucuda** root olarak:
+
+```bash
+OLD_ZIMBRA="oldmail.example.com"
+OLD_SSH_PORT="22"
+SSL_MIGRATE_KEY="/root/.ssh/zimbra_ssl_migrate_ed25519"
+
+: "${OLD_ZIMBRA:?OLD_ZIMBRA boş; örnek hostname/IP yerine gerçek kaynak adresini yazın.}"
+: "${SSL_MIGRATE_KEY:?SSL_MIGRATE_KEY boş; anahtar dosya yolunu ayarlayın.}"
+test -s "${SSL_MIGRATE_KEY}.pub" || {
+  printf 'Public key not found: %s\n' "${SSL_MIGRATE_KEY}.pub" >&2
+  exit 1
+}
+
+PUB_KEY="$(cat "${SSL_MIGRATE_KEY}.pub")"
+
+ssh -p "$OLD_SSH_PORT" \
+  -o StrictHostKeyChecking=yes \
+  root@"$OLD_ZIMBRA" \
+  bash -s -- "$PUB_KEY" <<'REMOTE'
+set -euo pipefail
+pub_key="$1"
+zimbra_home="$(getent passwd zimbra | awk -F: '$1 == "zimbra" { print $6 }')"
+test -n "$zimbra_home"
+
+install -d -o zimbra -g zimbra -m 0700 "$zimbra_home/.ssh"
+auth_keys="$zimbra_home/.ssh/authorized_keys"
+touch "$auth_keys"
+chown zimbra:zimbra "$auth_keys"
+chmod 0600 "$auth_keys"
+
+if ! grep -qxF "$pub_key" "$auth_keys"; then
+  printf '%s\n' "$pub_key" >> "$auth_keys"
+fi
+
+command -v restorecon >/dev/null 2>&1 && \
+  restorecon -RF "$zimbra_home/.ssh"
+
+printf 'Authorized key installed for zimbra.\n'
+REMOTE
+```
+
+`OLD_ZIMBRA` için IP adresi de kullanılabilir (ör. `10.1.0.20`). Root oturumunda `yes` istemi görülürse, 3. adımda bağımsız doğruladığınız fingerprint ile eşleştiğinden emin olun. Komut yalnızca `.pub` satırını ekler; özel anahtarı asla eski sunucuya kopyalamayın. Komut tekrar çalıştırılırsa aynı satırı ikinci kez eklemez.
+
+#### Alternatif: `zimbra` parolası varsa `ssh-copy-id`
+
+Eski sunucuda `zimbra` için parola ile SSH açıksa:
 
 ```bash
 OLD_ZIMBRA="oldmail.example.com"
@@ -135,9 +185,9 @@ ssh-copy-id \
   "zimbra@${OLD_ZIMBRA}"
 ```
 
-`yes` cevabını vermeden önce fingerprint istemini 3. adımda alınan değerle karşılaştırın. `ssh-copy-id` normalde eski sunucudaki `zimbra` parolasını veya önceden yetkilendirilmiş başka bir kimlik doğrulama yöntemini ister. Yalnızca açık anahtarı kurar.
+#### Alternatif: eski sunucu konsolundan elle kurulum
 
-`ssh-copy-id` yoksa veya `zimbra` için parola ile SSH kapalıysa **yeni sunucuda** açık anahtarı görüntüleyin:
+Yeni sunucudan root SSH mümkün değilse, **yeni sunucuda** açık anahtarı görüntüleyin:
 
 ```bash
 SSL_MIGRATE_KEY="${SSL_MIGRATE_KEY:-/root/.ssh/zimbra_ssl_migrate_ed25519}"

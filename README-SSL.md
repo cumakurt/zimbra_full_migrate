@@ -119,7 +119,57 @@ The migration script defaults to `StrictHostKeyChecking=yes`. Do not accept a ne
 
 ### 4. Copy the public key to the old server
 
-Return to the root shell on the **new server** and use `ssh-copy-id`. Re-export the variables if this is a new session:
+The migration script connects to the source as `zimbra@`, so the public key must be added to the old server's `zimbra` `authorized_keys`. On many Zimbra installations the `zimbra` account has no password or password SSH is disabled, so `ssh-copy-id zimbra@...` **will not work**.
+
+**Recommended:** From the new server, use your existing **root SSH access** to install the public key remotely. This step uses whatever root SSH identity already works for you; `SSL_MIGRATE_KEY` is only the public key being installed and is used later for `zimbra@` connections.
+
+On the **new server** as root:
+
+```bash
+OLD_ZIMBRA="oldmail.example.com"
+OLD_SSH_PORT="22"
+SSL_MIGRATE_KEY="/root/.ssh/zimbra_ssl_migrate_ed25519"
+
+: "${OLD_ZIMBRA:?OLD_ZIMBRA is empty; replace the example hostname/IP with the real source address.}"
+: "${SSL_MIGRATE_KEY:?SSL_MIGRATE_KEY is empty; set the key file path.}"
+test -s "${SSL_MIGRATE_KEY}.pub" || {
+  printf 'Public key not found: %s\n' "${SSL_MIGRATE_KEY}.pub" >&2
+  exit 1
+}
+
+PUB_KEY="$(cat "${SSL_MIGRATE_KEY}.pub")"
+
+ssh -p "$OLD_SSH_PORT" \
+  -o StrictHostKeyChecking=yes \
+  root@"$OLD_ZIMBRA" \
+  bash -s -- "$PUB_KEY" <<'REMOTE'
+set -euo pipefail
+pub_key="$1"
+zimbra_home="$(getent passwd zimbra | awk -F: '$1 == "zimbra" { print $6 }')"
+test -n "$zimbra_home"
+
+install -d -o zimbra -g zimbra -m 0700 "$zimbra_home/.ssh"
+auth_keys="$zimbra_home/.ssh/authorized_keys"
+touch "$auth_keys"
+chown zimbra:zimbra "$auth_keys"
+chmod 0600 "$auth_keys"
+
+if ! grep -qxF "$pub_key" "$auth_keys"; then
+  printf '%s\n' "$pub_key" >> "$auth_keys"
+fi
+
+command -v restorecon >/dev/null 2>&1 && \
+  restorecon -RF "$zimbra_home/.ssh"
+
+printf 'Authorized key installed for zimbra.\n'
+REMOTE
+```
+
+You can use an IP address for `OLD_ZIMBRA` (for example `10.1.0.20`). If SSH prompts for host-key confirmation, compare the fingerprint with the value verified independently in step 3. Only the `.pub` line is installed; never copy the private key to the old server. Re-running the command does not duplicate an already-present key line.
+
+#### Alternative: `ssh-copy-id` when `zimbra` password login works
+
+If password SSH for `zimbra` is enabled on the old server:
 
 ```bash
 OLD_ZIMBRA="oldmail.example.com"
@@ -135,9 +185,9 @@ ssh-copy-id \
   "zimbra@${OLD_ZIMBRA}"
 ```
 
-Compare the fingerprint prompt with the value collected in step 3 before answering `yes`. `ssh-copy-id` normally asks for the old server's `zimbra` password or another already-authorized authentication method. It installs only the public key.
+#### Alternative: manual install from the old server console
 
-If `ssh-copy-id` is unavailable or password login for `zimbra` is disabled, display the public key on the **new server**:
+If root SSH from the new server is not possible, display the public key on the **new server**:
 
 ```bash
 SSL_MIGRATE_KEY="${SSL_MIGRATE_KEY:-/root/.ssh/zimbra_ssl_migrate_ed25519}"
