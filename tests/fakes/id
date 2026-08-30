@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+
+case "${1:-}" in
+    -un)
+        printf 'zimbra\n'
+        ;;
+    -u)
+        printf '1001\n'
+        ;;
+    *)
+        /usr/bin/id "$@"
+        ;;
+esac

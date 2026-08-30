@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+if [[ -n "${FAKE_SCP_SLEEP_MARKER:-}" && ! -e "$FAKE_SCP_SLEEP_MARKER" ]]; then
+    : > "$FAKE_SCP_SLEEP_MARKER"
+    sleep 30
+fi
+
+destination="${!#}"
+arguments=("$@")
+source_index=$(($# - 2))
+source_spec="${arguments[$source_index]}"
+source_path="${source_spec#*:}"
+source_name="$(basename "$source_path")"
+
+cp -- "${FAKE_SOURCE_CERT_DIR:?}/$source_name" "$destination"

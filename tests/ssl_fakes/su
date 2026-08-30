@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+command=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -c)
+            command="${2:?missing command}"
+            shift 2
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+
+[[ -n "$command" ]]
+exec bash -c "$command"

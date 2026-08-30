@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+remote_command="${!#}"
+
+case "$remote_command" in
+    "printf 'SSH_OK\\n'")
+        printf 'SSH_OK\n'
+        ;;
+    *)
+        bash -c "$remote_command"
+        ;;
+esac

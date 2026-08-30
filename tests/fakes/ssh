@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+
+remote_command="${!#}"
+
+case "$remote_command" in
+    'printf OK')
+        printf 'OK\n'
+        ;;
+    'test -x /opt/zimbra/bin/zmprov -a -x /opt/zimbra/bin/zmmailbox')
+        exit 0
+        ;;
+    '/opt/zimbra/bin/zmcontrol -v')
+        printf 'Release fake-source\n'
+        ;;
+    '/opt/zimbra/bin/zmhostname')
+        printf 'source.example.test\n'
+        ;;
+    *)
+        remote_command="${remote_command//\/opt\/zimbra\/bin/$FAKE_ZIMBRA_BIN}"
+        FAKE_ZIMBRA_SIDE=source bash -c "$remote_command"
+        ;;
+esac

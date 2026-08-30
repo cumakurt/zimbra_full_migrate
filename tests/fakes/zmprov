@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+
+set -o nounset
+
+if [[ "${1:-}" == "-l" ]]; then
+    shift
+fi
+
+command_name="${1:-}"
+shift || true
+
+if [[ "${FAKE_ZIMBRA_SIDE:-destination}" == "source" ]]; then
+    case "$command_name" in
+        gad)
+            printf 'example.test\n'
+            ;;
+        gac)
+            printf 'default\n'
+            ;;
+        gaa)
+            printf 'user@example.test\n'
+            ;;
+        gadl)
+            printf 'group@example.test\n'
+            ;;
+        gc)
+            printf '%s\n' \
+                '# name default' \
+                'zimbraId: source-cos-id' \
+                'zimbraFeatureMailEnabled: TRUE'
+            ;;
+        ga)
+            if [[ "${2:-}" == "zimbraMailSieveScript" ]]; then
+                printf '%s\n' \
+                    '# name user@example.test' \
+                    'zimbraMailSieveScript: require ["fileinto"];' \
+                    'keep;'
+            else
+                printf '%s\n' \
+                    '# name user@example.test' \
+                    'cn: Test User' \
+                    'displayName: Test User' \
+                    'givenName: Test' \
+                    'sn: User' \
+                    'userPassword: {SSHA}fixture-hash' \
+                    'zimbraCOSId: source-cos-id' \
+                    'zimbraAccountStatus: active' \
+                    'zimbraMailAlias: alias@example.test' \
+                    'zimbraPrefTimeZoneId: Europe/Istanbul'
+            fi
+            ;;
+        gd)
+            printf '%s\n' \
+                '# name example.test' \
+                'zimbraId: source-domain-id' \
+                'zimbraDomainType: local' \
+                'zimbraDomainStatus: suspended' \
+                'zimbraMailStatus: enabled'
+            ;;
+        gdl)
+            printf '%s\n' \
+                '# name group@example.test' \
+                'displayName: Test Group' \
+                'zimbraMailAlias: team@example.test'
+            ;;
+        gdlm)
+            printf 'member@external.example\n'
+            ;;
+        *)
+            printf 'Unsupported source zmprov command: %s\n' "$command_name" >&2
+            exit 1
+            ;;
+    esac
+    exit 0
+fi
+
+mkdir -p \
+    "$FAKE_ZIMBRA_STATE/accounts" \
+    "$FAKE_ZIMBRA_STATE/cos" \
+    "$FAKE_ZIMBRA_STATE/domains" \
+    "$FAKE_ZIMBRA_STATE/dls"
+
+case "$command_name" in
+    gas)
+        printf 'destination.example.test\n'
+        ;;
+    gd)
+        [[ -f "$FAKE_ZIMBRA_STATE/domains/$1" ]]
+        ;;
+    cd)
+        : > "$FAKE_ZIMBRA_STATE/domains/$1"
+        ;;
+    gc)
+        [[ -f "$FAKE_ZIMBRA_STATE/cos/$1" ]]
+        ;;
+    cc)
+        : > "$FAKE_ZIMBRA_STATE/cos/$1"
+        ;;
+    ga)
+        [[ -f "$FAKE_ZIMBRA_STATE/accounts/$1" ]] || exit 1
+        printf '# name %s\n' "$1"
+        ;;
+    gdl)
+        [[ -f "$FAKE_ZIMBRA_STATE/dls/$1" ]] || exit 1
+        printf '# name %s\n' "$1"
+        ;;
+    cdl)
+        : > "$FAKE_ZIMBRA_STATE/dls/$1"
+        ;;
+    gdlm)
+        [[ -f "$FAKE_ZIMBRA_STATE/dls/$1" ]]
+        ;;
+    -f)
+        [[ -s "$1" ]]
+        ;;
+    ca)
+        [[ ! -f "$FAKE_ZIMBRA_STATE/domain-status-applied" ]] || exit 1
+        : > "$FAKE_ZIMBRA_STATE/accounts/$1"
+        ;;
+    md)
+        if [[ "${2:-}" == "zimbraDomainStatus" ]]; then
+            : > "$FAKE_ZIMBRA_STATE/domain-status-applied"
+        fi
+        ;;
+    mc|ma|sac|aaa|adla|adlm|mdl)
+        ;;
+    *)
+        printf 'Unsupported destination zmprov command: %s\n' "$command_name" >&2
+        exit 1
+        ;;
+esac

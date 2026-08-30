@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+
+if [[ "${1:-}" == "-v" ]]; then
+    printf 'Release fake-destination\n'
+    exit 0
+fi
+
+exit 1

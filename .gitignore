@@ -1,0 +1,5 @@
+# Migration state contains password hashes, Sieve scripts, and mailbox data.
+/.zimbra-full-migration/
+
+# Local deployment configuration can contain host-specific values.
+/CONFIG

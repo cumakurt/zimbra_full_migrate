@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+command_name="$(basename "$0")"
+
+verify_certificate_set() {
+    local key="$1" leaf="$2" chain="$3" key_hash cert_hash
+    key_hash="$(openssl pkey -in "$key" -pubout -outform DER 2>/dev/null | sha256sum | awk '{print $1}')"
+    cert_hash="$(openssl x509 -in "$leaf" -pubkey -noout 2>/dev/null |
+        openssl pkey -pubin -outform DER 2>/dev/null |
+        sha256sum | awk '{print $1}')"
+    [[ "$key_hash" == "$cert_hash" ]]
+    openssl verify -purpose sslserver -CAfile "$chain" "$leaf" >/dev/null
+}
+
+case "$command_name" in
+    zmhostname)
+        printf '%s\n' "${FAKE_TARGET_HOSTNAME:-destination.example.test}"
+        ;;
+    zmcontrol)
+        case "${1:-}" in
+            -v)
+                printf '%s\n' "${FAKE_ZIMBRA_VERSION:-Release 10.1.0.GA.fake}"
+                ;;
+            status|restart)
+                printf 'Host %s\n' "${FAKE_TARGET_HOSTNAME:-destination.example.test}"
+                ;;
+            *)
+                exit 1
+                ;;
+        esac
+        ;;
+    zmcertmgr)
+        action="${1:-}"
+        shift || true
+        case "$action" in
+            verifycrt)
+                [[ "${1:-}" == "comm" ]]
+                verify_certificate_set "${2:?}" "${3:?}" "${4:?}"
+                printf 'Valid certificate chain: %s: OK\n' "$3"
+                ;;
+            deploycrt)
+                [[ "${1:-}" == "comm" ]]
+                leaf="${2:?}"
+                chain="${3:?}"
+                key="${FAKE_LOCAL_COMM_DIR:?}/commercial.key"
+                verify_certificate_set "$key" "$leaf" "$chain"
+
+                cp -- "$leaf" "$FAKE_LOCAL_COMM_DIR/commercial.crt"
+                cp -- "$chain" "$FAKE_LOCAL_COMM_DIR/commercial_ca.crt"
+                cat "$chain" >> "$FAKE_LOCAL_COMM_DIR/commercial.crt"
+                mkdir -p -- "${FAKE_ZIMBRA_HOME:?}/conf/ca"
+                cp -- "$leaf" "$FAKE_ZIMBRA_HOME/conf/smtpd.crt"
+                cp -- "$key" "$FAKE_ZIMBRA_HOME/conf/smtpd.key"
+                cp -- "$chain" "$FAKE_ZIMBRA_HOME/conf/ca/ca.pem"
+
+                if [[ -n "${FAKE_DEPLOY_FAIL_ONCE_MARKER:-}" && ! -e "$FAKE_DEPLOY_FAIL_ONCE_MARKER" ]]; then
+                    : > "$FAKE_DEPLOY_FAIL_ONCE_MARKER"
+                    exit 9
+                fi
+                if [[ -n "${FAKE_DEPLOY_SLEEP_ONCE_MARKER:-}" && ! -e "$FAKE_DEPLOY_SLEEP_ONCE_MARKER" ]]; then
+                    : > "$FAKE_DEPLOY_SLEEP_ONCE_MARKER"
+                    sleep 30
+                fi
+                printf 'Fake deployment complete.\n'
+                ;;
+            viewdeployedcrt)
+                openssl x509 -in "${FAKE_LOCAL_COMM_DIR:?}/commercial.crt" -noout -serial
+                ;;
+            *)
+                printf 'Unsupported fake zmcertmgr action: %s\n' "$action" >&2
+                exit 1
+                ;;
+        esac
+        ;;
+    *)
+        printf 'Unsupported fake Zimbra command: %s\n' "$command_name" >&2
+        exit 1
+        ;;
+esac
