@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+domain=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --domain)
+            domain="${2:?}"
+            shift 2
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+
+[[ -n "$domain" ]]
+[[ -n "${FAKE_DKIM_STORE:-}" && -n "${FAKE_LIVE_DKIM:-}" ]]
+cp -- "${FAKE_DKIM_STORE}/${domain}.query" "${FAKE_LIVE_DKIM}/${domain}.query"
+printf 'DKIM import OK: %s\n' "$domain"

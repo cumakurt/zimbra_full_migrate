@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+if [[ "${FAKE_SSH_FAIL:-0}" == "1" ]]; then
+    printf 'zimbra@source.example.test: Permission denied (publickey,password).\n' >&2
+    exit 255
+fi
+
+remote_command="${!#}"
+
+case "$remote_command" in
+    "printf 'SSH_OK\\n'")
+        printf 'SSH_OK\n'
+        ;;
+    *)
+        bash -c "$remote_command"
+        ;;
+esac

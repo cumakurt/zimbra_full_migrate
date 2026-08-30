@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+command_name="$(basename "$0")"
+store="${FAKE_DKIM_STORE:?}"
+live="${FAKE_LIVE_DKIM:?}"
+
+case "$command_name" in
+    zmhostname)
+        printf '%s\n' "${FAKE_TARGET_HOSTNAME:-destination.example.test}"
+        ;;
+    zmcontrol)
+        case "${1:-}" in
+            -v)
+                printf '%s\n' "${FAKE_ZIMBRA_VERSION:-Release 10.1.0.GA.fake}"
+                ;;
+            *)
+                exit 1
+                ;;
+        esac
+        ;;
+    zmprov)
+        case "${1:-}" in
+            gad)
+                if [[ -n "${FAKE_SOURCE_DOMAINS:-}" ]]; then
+                    tr ' ' '\n' <<< "$FAKE_SOURCE_DOMAINS"
+                else
+                    printf 'example.com\n'
+                fi
+                ;;
+            gd)
+                domain="${2:?}"
+                if [[ -f "$store/${domain}.missing-target" ]]; then
+                    printf 'domain not found\n' >&2
+                    exit 1
+                fi
+                printf 'zimbraDomainName: %s\n' "$domain"
+                ;;
+            *)
+                exit 1
+                ;;
+        esac
+        ;;
+    zmdkimkeyutil)
+        action="${1:-}"
+        shift || true
+        case "$action" in
+            -q)
+                kind="${1:-}"
+                value="${2:-}"
+                if [[ "$kind" == "-d" ]]; then
+                    if [[ "$0" == *remote-zimbra* ]]; then
+                        if [[ -f "$store/${value}.query" ]]; then
+                            cat "$store/${value}.query"
+                            exit 0
+                        fi
+                    elif [[ -f "$live/${value}.query" ]]; then
+                        cat "$live/${value}.query"
+                        exit 0
+                    fi
+                    printf 'No DKIM Information for %s\n' "$value" >&2
+                    exit 1
+                fi
+                if [[ "$kind" == "-s" ]]; then
+                    if [[ "$0" == *remote-zimbra* ]]; then
+                        if [[ -f "$store/selector-${value}.owner" ]]; then
+                            printf 'DKIM Domain: %s\n' "$(cat "$store/selector-${value}.owner")"
+                            exit 0
+                        fi
+                    elif [[ -f "$live/selector-${value}.owner" ]]; then
+                        printf 'DKIM Domain: %s\n' "$(cat "$live/selector-${value}.owner")"
+                        exit 0
+                    fi
+                    printf 'No DKIM Information for Selector %s\n' "$value" >&2
+                    exit 1
+                fi
+                exit 1
+                ;;
+            -r)
+                [[ "${1:-}" == "-d" ]]
+                rm -f "$live/${2:?}.query"
+                ;;
+            *)
+                exit 1
+                ;;
+        esac
+        ;;
+    opendkim-testkey)
+        printf 'opendkim-testkey: OK\n'
+        ;;
+    *)
+        printf 'Unsupported fake Zimbra command: %s\n' "$command_name" >&2
+        exit 1
+        ;;
+esac
