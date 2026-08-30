@@ -416,19 +416,22 @@ PY
     assert_contains "$TEST_TMP/deploy-interrupt.out" 'Pre-deployment files and Zimbra certificate configuration were restored.'
 }
 
-test_world_readable_source_key_is_rejected() {
-    local fake_home="$TEST_TMP/perms-home" run_root="$TEST_TMP/perms-run" rc
+test_world_readable_source_key_is_accepted() {
+    local fake_home="$TEST_TMP/perms-home" run_root="$TEST_TMP/perms-run" mode
     prepare_fake_home "$fake_home"
     chmod 0644 "$SOURCE_CERT_DIR/commercial.key"
 
-    set +o errexit
-    run_ssl "$fake_home" "$run_root" "$TEST_TMP/perms.out" --verify-only
-    rc=$?
-    set -o errexit
+    run_ssl "$fake_home" "$run_root" "$TEST_TMP/perms.out" || {
+        chmod 0600 "$SOURCE_CERT_DIR/commercial.key"
+        sed -n '1,280p' "$TEST_TMP/perms.out" >&2
+        fail 'world-readable source key deployment failed'
+    }
     chmod 0600 "$SOURCE_CERT_DIR/commercial.key"
 
-    [[ "$rc" -eq 1 ]] || fail "world-readable source key returned $rc instead of 1"
+    mode="$(stat -c '%a' "$fake_home/ssl/zimbra/commercial/commercial.key")"
+    [[ "$mode" == "640" ]] || fail "destination commercial.key mode is $mode instead of 640"
     assert_contains "$TEST_TMP/perms.out" 'Source commercial.key is accessible to other users'
+    assert_contains "$TEST_TMP/perms.out" 'destination will still use mode 0640'
 }
 
 prepare_certificates
@@ -441,6 +444,6 @@ test_ssh_error_is_concise
 test_failed_deployment_rolls_back
 test_interrupt_and_lock
 test_deploy_interrupt_rolls_back
-test_world_readable_source_key_is_rejected
+test_world_readable_source_key_is_accepted
 
 printf 'All SSL migration tests passed.\n'

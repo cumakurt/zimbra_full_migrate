@@ -668,7 +668,7 @@ REMOTE_KEY_MODE="$(tail -n1 "$REMOTE_KEY_MODE_OUTPUT" | tr -d '\r')"
 [[ "$REMOTE_KEY_MODE" =~ ^[0-7]{3,4}$ ]] || \
     die "Source commercial.key returned an invalid permission mode: $REMOTE_KEY_MODE"
 if ((8#$REMOTE_KEY_MODE & 0007)); then
-    die "Source commercial.key is accessible to other users (mode $REMOTE_KEY_MODE); fix its permissions first."
+    warn "Source commercial.key is accessible to other users (mode $REMOTE_KEY_MODE); destination will still use mode $KEY_MODE."
 fi
 log "Source commercial.key mode: $REMOTE_KEY_MODE"
 
