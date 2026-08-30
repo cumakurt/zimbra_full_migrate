@@ -346,6 +346,207 @@ run_certmgr_combined() {
     fi
 }
 
+run_certmgr_or_die() {
+    local fail_message="$1" output_file line
+    shift
+    output_file="${STAGE_DIR}/zmcertmgr-last.out"
+    if run_certmgr_combined "$output_file" "$@"; then
+        cat "$output_file" >> "$LOG_FILE"
+        if [[ "$VERBOSE" -eq 1 ]]; then
+            cat "$output_file"
+        fi
+        return 0
+    fi
+    cat "$output_file" >> "$LOG_FILE"
+    if [[ -s "$output_file" ]]; then
+        while IFS= read -r line; do
+            [[ -n "$line" ]] && warn "$line"
+        done < <(tail -n 30 "$output_file")
+    fi
+    die "$fail_message"
+}
+
+pem_certificate_fingerprint() {
+    openssl x509 -in "$1" -outform DER 2>/dev/null | sha256sum | awk '{print $1}'
+}
+
+pem_certificate_field() {
+    local file="$1" field="$2" value
+    if value="$(openssl x509 -in "$file" -noout "-${field}" -nameopt RFC2253 2>/dev/null)"; then
+        printf '%s\n' "${value#"${field}"=}"
+        return 0
+    fi
+    value="$(openssl x509 -in "$file" -noout "-${field}" 2>/dev/null)" || return 1
+    printf '%s\n' "${value#"${field}"=}"
+}
+
+split_pem_certificates() {
+    local bundle="$1" dest_dir="$2"
+    rm -rf -- "$dest_dir"
+    mkdir -p -- "$dest_dir"
+    [[ -s "$bundle" ]] || return 0
+    awk -v dest="$dest_dir" '
+        /-----BEGIN CERTIFICATE-----/ {
+            n++
+            f = sprintf("%s/%02d.pem", dest, n)
+            capture = 1
+        }
+        capture { print > f }
+        /-----END CERTIFICATE-----/ && capture {
+            capture = 0
+            close(f)
+        }
+    ' "$bundle"
+}
+
+chain_has_fingerprint() {
+    local chain="$1" fingerprint="$2" part scan_dir
+    [[ -s "$chain" ]] || return 1
+    scan_dir="${STAGE_DIR}/.chain-scan.$$"
+    split_pem_certificates "$chain" "$scan_dir"
+    for part in "$scan_dir"/*.pem; do
+        [[ -f "$part" ]] || continue
+        if [[ "$(pem_certificate_fingerprint "$part")" == "$fingerprint" ]]; then
+            rm -rf -- "$scan_dir"
+            return 0
+        fi
+    done
+    rm -rf -- "$scan_dir"
+    return 1
+}
+
+append_unique_chain_certificate() {
+    local chain="$1" cert="$2" fingerprint
+    fingerprint="$(pem_certificate_fingerprint "$cert")"
+    [[ -n "$fingerprint" ]] || return 1
+    [[ "$fingerprint" != "$LEAF_FINGERPRINT" ]] || return 1
+    if ! openssl x509 -in "$cert" -checkend 0 -noout >/dev/null 2>&1; then
+        log "Skipping expired certificate while building the CA chain."
+        return 1
+    fi
+    chain_has_fingerprint "$chain" "$fingerprint" && return 1
+    cat "$cert" >> "$chain"
+    printf '\n' >> "$chain"
+    return 0
+}
+
+append_certs_from_bundle() {
+    local chain="$1" bundle="$2" part split_dir
+    split_dir="${STAGE_DIR}/.bundle-split.$$"
+    split_pem_certificates "$bundle" "$split_dir"
+    for part in "$split_dir"/*.pem; do
+        [[ -f "$part" ]] || continue
+        append_unique_chain_certificate "$chain" "$part" || true
+    done
+    rm -rf -- "$split_dir"
+}
+
+find_issuer_certificate() {
+    local wanted_subject="$1" bundle="$2" part split_dir subject
+    split_dir="${STAGE_DIR}/.issuer-split.$$"
+    split_pem_certificates "$bundle" "$split_dir"
+    for part in "$split_dir"/*.pem; do
+        [[ -f "$part" ]] || continue
+        subject="$(pem_certificate_field "$part" subject)" || continue
+        if [[ "$subject" == "$wanted_subject" ]] && \
+                openssl x509 -in "$part" -checkend 0 -noout >/dev/null 2>&1; then
+            cp -- "$part" "${STAGE_DIR}/.found-issuer.pem"
+            rm -rf -- "$split_dir"
+            return 0
+        fi
+    done
+    rm -rf -- "$split_dir"
+    return 1
+}
+
+local_trust_bundles() {
+    local candidate
+    for candidate in \
+        /etc/ssl/certs/ca-certificates.crt \
+        /etc/pki/tls/certs/ca-bundle.crt \
+        "${ZIMBRA_HOME}/ssl/zimbra/ca/ca.pem" \
+        "${ZIMBRA_HOME}/conf/ca/ca.pem" \
+        "${LOCAL_COMM_DIR}/commercial_ca.crt"
+    do
+        [[ -f "$candidate" && -r "$candidate" ]] || continue
+        printf '%s\n' "$candidate"
+    done
+}
+
+verify_leaf_against_chain_file() {
+    local extra=() help_text
+    [[ -s "$CHAIN_CRT" ]] || return 1
+    help_text="$(openssl verify -help 2>&1 || true)"
+    [[ "$help_text" == *'-no-CAfile'* ]] && extra+=(-no-CAfile)
+    [[ "$help_text" == *'-no-CApath'* ]] && extra+=(-no-CApath)
+    openssl verify -purpose sslserver -CAfile "$CHAIN_CRT" "${extra[@]}" \
+        "$LEAF_CRT" >> "$LOG_FILE" 2>&1
+}
+
+# zmcertmgr trusts only the provided CA file. OpenSSL 3 may also use the
+# system store, so a source Let's Encrypt chain that omits the root (or still
+# contains the expired DST Root CA X3) can pass openssl and fail zmcertmgr.
+prepare_zmcertmgr_chain() {
+    local tip issuer subject bundle added depth
+    : > "$CHAIN_CRT"
+
+    CRT_COUNT="$(grep -c -- '-----BEGIN CERTIFICATE-----' "$RAW_CRT" || true)"
+    SOURCE_CA_COUNT="$(grep -c -- '-----BEGIN CERTIFICATE-----' "$RAW_CA" || true)"
+    [[ "$CRT_COUNT" -ge 1 ]] || die "Source commercial.crt has no PEM certificate."
+    [[ "$SOURCE_CA_COUNT" -ge 1 ]] || die "Source commercial_ca.crt has no PEM certificate."
+    log "Source commercial.crt PEM count: $CRT_COUNT"
+    log "Source commercial_ca.crt PEM count: $SOURCE_CA_COUNT"
+
+    if [[ "$CRT_COUNT" -gt 1 ]]; then
+        append_certs_from_bundle "$CHAIN_CRT" "$RAW_CRT"
+    fi
+    append_certs_from_bundle "$CHAIN_CRT" "$RAW_CA"
+
+    for ((depth = 0; depth < 8; depth++)); do
+        verify_leaf_against_chain_file && return 0
+        if [[ -s "$CHAIN_CRT" ]]; then
+            split_pem_certificates "$CHAIN_CRT" "${STAGE_DIR}/.chain-tip"
+            tip="$(printf '%s\n' "${STAGE_DIR}/.chain-tip/"*.pem | tail -n1)"
+        else
+            tip="$LEAF_CRT"
+        fi
+        [[ -s "$tip" ]] || break
+        issuer="$(pem_certificate_field "$tip" issuer)" || break
+        subject="$(pem_certificate_field "$tip" subject)" || break
+        [[ "$issuer" != "$subject" ]] || break
+        added=0
+        while IFS= read -r bundle; do
+            if find_issuer_certificate "$issuer" "$bundle"; then
+                if append_unique_chain_certificate "$CHAIN_CRT" "${STAGE_DIR}/.found-issuer.pem"; then
+                    log "Appended a local trust anchor to complete the CA chain."
+                    added=1
+                    break
+                fi
+            fi
+        done < <(local_trust_bundles)
+        [[ "$added" -eq 1 ]] || break
+    done
+
+    verify_leaf_against_chain_file
+}
+
+ensure_zimbra_can_read_stage() {
+    [[ "$CERTMGR_AS_ROOT" -eq 0 ]] || return 0
+    if run_zimbra test -r "$STAGED_KEY" && \
+            run_zimbra test -r "$LEAF_CRT" && \
+            run_zimbra test -r "$CHAIN_CRT"; then
+        return 0
+    fi
+    chmod a+x "$ZIMBRA_TMP" 2>/dev/null || true
+    chown -R "$ZIMBRA_USER:$ZIMBRA_GROUP" "$STAGE_DIR"
+    chmod 700 "$STAGE_DIR"
+    chmod 600 "$STAGED_KEY" "$LEAF_CRT" "$CHAIN_CRT"
+    run_zimbra test -r "$STAGED_KEY" && \
+        run_zimbra test -r "$LEAF_CRT" && \
+        run_zimbra test -r "$CHAIN_CRT" || \
+        die "The zimbra user cannot read the staged certificate files under $STAGE_DIR."
+}
+
 terminate_active_group() {
     local i
     [[ -n "$ACTIVE_PROCESS_GROUP" ]] || return 0
@@ -690,7 +891,6 @@ ok "Certificate files transferred to the private staging area."
 
 chmod 600 "$RAW_KEY" "$RAW_CRT" "$RAW_CA"
 cp -- "$RAW_KEY" "$STAGED_KEY"
-cp -- "$RAW_CA" "$CHAIN_CRT"
 
 # A deployed commercial.crt may contain the leaf followed by the CA chain.
 # zmcertmgr expects the leaf and CA chain as separate deployment inputs.
@@ -702,23 +902,14 @@ awk '
     /-----END CERTIFICATE-----/ && capture { exit }
 ' "$RAW_CRT" > "$LEAF_CRT"
 
-chmod 600 "$STAGED_KEY" "$LEAF_CRT" "$CHAIN_CRT"
-[[ -s "$STAGED_KEY" && -s "$LEAF_CRT" && -s "$CHAIN_CRT" ]] || \
+chmod 600 "$STAGED_KEY" "$LEAF_CRT"
+[[ -s "$STAGED_KEY" && -s "$LEAF_CRT" && -s "$RAW_CA" ]] || \
     die "One or more staged certificate files are empty."
 if grep -Eq -- '-----BEGIN ([A-Z0-9 ]+ )?PRIVATE KEY-----' "$RAW_CRT" "$RAW_CA"; then
     die "A certificate/CA input unexpectedly contains private-key material."
 fi
-
-CRT_COUNT="$(grep -c -- '-----BEGIN CERTIFICATE-----' "$RAW_CRT" || true)"
-CA_COUNT="$(grep -c -- '-----BEGIN CERTIFICATE-----' "$CHAIN_CRT" || true)"
-[[ "$CRT_COUNT" -ge 1 ]] || die "Source commercial.crt has no PEM certificate."
-[[ "$CA_COUNT" -ge 1 ]] || die "Source commercial_ca.crt has no PEM certificate."
-log "Source commercial.crt PEM count: $CRT_COUNT"
-log "Source commercial_ca.crt PEM count: $CA_COUNT"
-
-chown -R "$ZIMBRA_USER:$ZIMBRA_GROUP" "$STAGE_DIR"
-chmod 700 "$STAGE_DIR"
-chmod 600 "$STAGED_KEY" "$LEAF_CRT" "$CHAIN_CRT" "$RAW_KEY" "$RAW_CRT" "$RAW_CA"
+LEAF_FINGERPRINT="$(pem_certificate_fingerprint "$LEAF_CRT")"
+[[ -n "$LEAF_FINGERPRINT" ]] || die "Could not fingerprint the staged leaf certificate."
 
 phase 3 "$TOTAL_PHASES" "Cryptographic validation"
 log "Validating certificate syntax, trust chain, time, and private key..."
@@ -726,9 +917,11 @@ openssl x509 -in "$LEAF_CRT" -noout >> "$LOG_FILE" 2>&1 || \
     die "Leaf certificate is not a valid X.509 PEM certificate."
 openssl pkey -in "$STAGED_KEY" -noout -passin pass: >/dev/null 2>&1 || \
     die "Private key is invalid or encrypted; Zimbra requires non-interactive access."
-openssl verify -purpose sslserver -CAfile "$CHAIN_CRT" "$LEAF_CRT" \
-    >> "$LOG_FILE" 2>&1 || \
-    die "OpenSSL could not build a currently valid server-certificate chain."
+prepare_zmcertmgr_chain || \
+    die "Could not build a CA chain that zmcertmgr will accept from the source files and local trust store."
+[[ -s "$CHAIN_CRT" ]] || die "The prepared CA chain is empty."
+CHAIN_COUNT="$(grep -c -- '-----BEGIN CERTIFICATE-----' "$CHAIN_CRT" || true)"
+log "Prepared CA chain PEM count: $CHAIN_COUNT"
 
 KEY_PUB_HASH="$(
     openssl pkey -in "$STAGED_KEY" -passin pass: -pubout -outform DER 2>/dev/null |
@@ -742,6 +935,11 @@ CRT_PUB_HASH="$(
 [[ -n "$KEY_PUB_HASH" && "$KEY_PUB_HASH" == "$CRT_PUB_HASH" ]] || \
     die "Certificate and private key do not match."
 ok "Certificate, chain, and private key are cryptographically consistent."
+
+chown -R "$ZIMBRA_USER:$ZIMBRA_GROUP" "$STAGE_DIR"
+chmod 700 "$STAGE_DIR"
+chmod 600 "$STAGED_KEY" "$LEAF_CRT" "$CHAIN_CRT" "$RAW_KEY" "$RAW_CRT" "$RAW_CA"
+ensure_zimbra_can_read_stage
 
 SUBJECT="$(openssl x509 -in "$LEAF_CRT" -noout -subject | sed 's/^subject=//')"
 ISSUER="$(openssl x509 -in "$LEAF_CRT" -noout -issuer | sed 's/^issuer=//')"
@@ -774,8 +972,9 @@ else
 fi
 
 log "Running Zimbra-native verification against staged files..."
-run_certmgr_logged verifycrt comm "$STAGED_KEY" "$LEAF_CRT" "$CHAIN_CRT" || \
-    die "Zimbra zmcertmgr rejected the staged certificate set; target was not changed."
+run_certmgr_or_die \
+    "Zimbra zmcertmgr rejected the staged certificate set; target was not changed." \
+    verifycrt comm "$STAGED_KEY" "$LEAF_CRT" "$CHAIN_CRT"
 ok "Zimbra-native verification succeeded."
 
 if [[ "$VERIFY_ONLY" -eq 1 ]]; then

@@ -157,6 +157,7 @@ NO_COLOR=1 ./zimbra_ssl_migrate.sh \
 - Her çalışma benzersiz özel staging dizini ve log dosyası kullanır.
 - Sertifika/CA girdilerinden biri özel anahtar içeriği taşıyorsa işlem reddedilir.
 - Kaynak `commercial.key` “other” tarafından okunabiliyorsa uyarı verilir; hedef anahtar yine sürüme uygun izinlerle kurulur.
+- Kaynak CA dosyasında `zmcertmgr`’in istediği kök yoksa script zinciri hedefin güven deposundan tamamlar; süresi dolmuş CA sertifikalarını atlar.
 - OpenSSL; X.509 yapısını, güncel güven zincirini, sunucu amacını, anahtar eşleşmesini, sona erme zamanını ve hostname’i doğrular.
 - Hedefte ilk değişiklikten önce `zmcertmgr verifycrt` başarılı olmalıdır.
 - Zimbra 8.7 öncesi sürümlerde `zmcertmgr` root kipinde ve anahtar `0740`; algılanan 8.7 ve yeni sürümlerde `zimbra` kullanıcısıyla ve anahtar `0640` kipinde kullanılır. Bu davranış Zimbra’nın sürüme özgü yönergesini izler.

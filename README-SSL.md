@@ -157,6 +157,7 @@ NO_COLOR=1 ./zimbra_ssl_migrate.sh \
 - Every run gets a unique private staging directory and log file.
 - Certificate files are rejected if a certificate/CA input contains private-key material.
 - A world-readable source `commercial.key` produces a warning; the destination key is still installed with version-appropriate permissions.
+- If the source CA file omits a root that `zmcertmgr` requires, the script completes the chain from the destination trust store and skips expired CA certificates.
 - OpenSSL validates the X.509 structure, current trust chain, server purpose, key match, expiration, and hostname.
 - `zmcertmgr verifycrt` must pass before any destination change.
 - Zimbra versions before 8.7 use root-mode `zmcertmgr` and key mode `0740`; detected versions 8.7 and newer use the `zimbra` user and key mode `0640`, following Zimbra's version-specific guidance.

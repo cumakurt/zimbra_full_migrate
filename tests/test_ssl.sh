@@ -416,6 +416,60 @@ PY
     assert_contains "$TEST_TMP/deploy-interrupt.out" 'Pre-deployment files and Zimbra certificate configuration were restored.'
 }
 
+test_incomplete_chain_is_completed_from_local_trust() {
+    local fake_home="$TEST_TMP/chain-home" run_root="$TEST_TMP/chain-run"
+    local saved="$TEST_TMP/saved-source" expected actual log_file
+    mkdir -p "$saved"
+    cp -- "$SOURCE_CERT_DIR/commercial.key" "$SOURCE_CERT_DIR/commercial.crt" \
+        "$SOURCE_CERT_DIR/commercial_ca.crt" "$saved/"
+
+    openssl req -x509 -newkey rsa:2048 -nodes -days 30 -sha256 \
+        -keyout "$TEST_TMP/root2.key" -out "$TEST_TMP/root2.crt" \
+        -subj '/CN=SSL Migration Root 2' \
+        -addext 'basicConstraints=critical,CA:TRUE' \
+        -addext 'keyUsage=critical,keyCertSign,cRLSign' \
+        >/dev/null 2>&1
+    openssl req -new -newkey rsa:2048 -nodes \
+        -keyout "$TEST_TMP/int2.key" -out "$TEST_TMP/int2.csr" \
+        -subj '/CN=SSL Migration Intermediate 2' \
+        >/dev/null 2>&1
+    openssl x509 -req -in "$TEST_TMP/int2.csr" \
+        -CA "$TEST_TMP/root2.crt" -CAkey "$TEST_TMP/root2.key" -CAcreateserial \
+        -days 30 -sha256 \
+        -extfile <(printf '%s\n' 'basicConstraints=critical,CA:TRUE' \
+            'keyUsage=critical,keyCertSign,cRLSign') \
+        -out "$TEST_TMP/int2.crt" \
+        >/dev/null 2>&1
+    openssl req -new -newkey rsa:2048 -nodes \
+        -keyout "$SOURCE_CERT_DIR/commercial.key" -out "$TEST_TMP/leaf2.csr" \
+        -subj '/CN=destination.example.test' \
+        >/dev/null 2>&1
+    openssl x509 -req -in "$TEST_TMP/leaf2.csr" \
+        -CA "$TEST_TMP/int2.crt" -CAkey "$TEST_TMP/int2.key" -CAcreateserial \
+        -days 30 -sha256 -extfile "$TEST_TMP/leaf.ext" \
+        -out "$TEST_TMP/leaf2.crt" \
+        >/dev/null 2>&1
+    cp -- "$TEST_TMP/leaf2.crt" "$SOURCE_CERT_DIR/commercial.crt"
+    cp -- "$TEST_TMP/int2.crt" "$SOURCE_CERT_DIR/commercial_ca.crt"
+
+    prepare_fake_home "$fake_home"
+    cp -- "$TEST_TMP/root2.crt" "$fake_home/conf/ca/ca.pem"
+
+    run_ssl "$fake_home" "$run_root" "$TEST_TMP/chain.out" || {
+        cp -- "$saved/"* "$SOURCE_CERT_DIR/"
+        sed -n '1,280p' "$TEST_TMP/chain.out" >&2
+        fail 'incomplete-chain deployment failed'
+    }
+    cp -- "$saved/"* "$SOURCE_CERT_DIR/"
+
+    expected="$(certificate_fingerprint "$TEST_TMP/leaf2.crt")"
+    actual="$(certificate_fingerprint "$fake_home/ssl/zimbra/commercial/commercial.crt")"
+    [[ "$actual" == "$expected" ]] || fail 'completed-chain deployment used the wrong certificate'
+    log_file="$(find "$run_root/logs" -type f -name '*.log' -print -quit)"
+    [[ -n "$log_file" ]] || fail 'completed-chain deployment did not create a log'
+    assert_contains "$log_file" 'Appended a local trust anchor to complete the CA chain.'
+}
+
 test_world_readable_source_key_is_accepted() {
     local fake_home="$TEST_TMP/perms-home" run_root="$TEST_TMP/perms-run" mode
     prepare_fake_home "$fake_home"
@@ -445,5 +499,6 @@ test_failed_deployment_rolls_back
 test_interrupt_and_lock
 test_deploy_interrupt_rolls_back
 test_world_readable_source_key_is_accepted
+test_incomplete_chain_is_completed_from_local_trust
 
 printf 'All SSL migration tests passed.\n'
